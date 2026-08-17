@@ -1,0 +1,6 @@
+certs/
+access.log
+.DS_Store
+*.pem
+.vscode/
+.idea/
