@@ -517,9 +517,30 @@
       : (votes.hider ? "Waiting…" : "Resume");
   }
 
+  /* Only rebuild a section when its data changes — a 500ms interval calls render(),
+     and unconditional innerHTML rebuilds wipe input text and checkbox state. */
+  const renderSigs = {};
+  function sigChanged(key, sig) {
+    if (renderSigs[key] === sig) return false;
+    renderSigs[key] = sig;
+    return true;
+  }
+
+  function pulseIn(el) {
+    el.classList.remove("is-new");
+    void el.offsetWidth;
+    el.classList.add("is-new");
+  }
+
+  let lastBuzzedQuestion = null;
+
   function renderQuestion() {
     const root = $("hider-question");
     const q = JLNet.room && JLNet.room.pendingQuestion;
+    const hasVeto = table.hand.some((c) => c.defId === "veto");
+    const hasRand = table.hand.some((c) => c.defId === "randomize");
+    const sig = q ? [q.id, hasVeto, hasRand].join("|") : "";
+    if (!sigChanged("question", sig)) return;
     clearInterval(deadlineTimer);
     if (!q) {
       root.hidden = true;
@@ -530,8 +551,6 @@
     const opts = (q.options || []).map((o) =>
       `<button type="button" class="btn ${o.primary ? "btn-amber" : "btn-ghost"} btn-block" data-h="answer" data-answer="${escapeHtml(o.id)}">${escapeHtml(o.label)}</button>`
     ).join("");
-    const hasVeto = table.hand.some((c) => c.defId === "veto");
-    const hasRand = table.hand.some((c) => c.defId === "randomize");
     const named = q.kind === "tentacles" || q.kind === "photo";
     root.innerHTML = `
       <div class="kicker">Question · ${escapeHtml(q.cost || "")}</div>
@@ -545,6 +564,11 @@
         ${hasVeto ? `<button type="button" class="btn btn-rose" data-h="veto">Veto</button>` : ""}
         ${hasRand ? `<button type="button" class="btn btn-teal" data-h="randomize">Randomize</button>` : ""}
       </div>`;
+    pulseIn(root);
+    if (q.id !== lastBuzzedQuestion) {
+      lastBuzzedQuestion = q.id;
+      if (navigator.vibrate) { try { navigator.vibrate(120); } catch { /* ignore */ } }
+    }
     const tick = () => {
       const el = $("hider-deadline");
       if (!el || !q.deadline) return;
@@ -561,11 +585,16 @@
 
   function renderDraw() {
     const root = $("hider-draw");
+    const sig = pendingDraw
+      ? JSON.stringify([pendingDraw.cards.map((c) => c.uid), pendingDraw.selected, pendingDraw.keep])
+      : "";
+    if (!sigChanged("draw", sig)) return;
     if (!pendingDraw) {
       root.hidden = true;
       root.innerHTML = "";
       return;
     }
+    const wasHidden = root.hidden;
     root.hidden = false;
     root.innerHTML = `
       <div class="kicker">Draw</div>
@@ -573,9 +602,12 @@
       <p class="hint">Tap the card${pendingDraw.keep > 1 ? "s" : ""} you want in hand. The rest are discarded.</p>
       <div class="card-row">${pendingDraw.cards.map((c) => cardHtml(c, pendingDraw.selected.includes(c.uid), "keep-toggle")).join("")}</div>
       <button type="button" class="btn btn-amber btn-block" data-h="keep-confirm">Keep selected</button>`;
+    if (wasHidden) pulseIn(root);
   }
 
   function renderHand() {
+    const sig = JSON.stringify([table.hand.map((c) => c.uid), table.maxHand, size()]);
+    if (!sigChanged("hand", sig)) return;
     $("hider-hand-meta").textContent = table.hand.length + " / " + table.maxHand;
     $("hider-hand").innerHTML = table.hand.length
       ? table.hand.map((c) => cardHtml(c, false, "open-card")).join("")
@@ -594,6 +626,8 @@
   function renderCurses() {
     const list = (JLNet.room && JLNet.room.activeCurses) || [];
     const root = $("hider-curses");
+    const sig = JSON.stringify([list.map((c) => c.id), size()]);
+    if (!sigChanged("curses", sig)) return;
     if (!list.length) {
       root.innerHTML = `<p class="empty">No curses on the seekers right now.</p>`;
       return;
@@ -616,6 +650,8 @@
 
   function renderStats() {
     const live = JLDeck.handTime(table);
+    const sig = [live, table.timeAwarded || 0, table.drawPile.length, table.hand.length, table.maxHand].join("|");
+    if (!sigChanged("stats", sig)) return;
     $("hider-stats").innerHTML = `
       <div class="stat-grid">
         <div><b>${live} min</b><span>Time bonuses in hand</span></div>
@@ -628,6 +664,8 @@
 
   function renderLog() {
     const log = ((JLNet.room && JLNet.room.log) || []).slice().reverse();
+    const sig = log.length + "|" + (log[0] ? (log[0].at || log[0].title || "") : "");
+    if (!sigChanged("log", sig)) return;
     $("hider-log").innerHTML = log.length
       ? log.map((e) => `<article class="log-item"><div class="log-item__kind">${escapeHtml((e.kind || "").toUpperCase())}</div><h4>${escapeHtml(e.title || "")}</h4><p>${escapeHtml(e.detail || "")}</p></article>`).join("")
       : `<p class="empty">Questions will land here as seekers ask them.</p>`;
@@ -635,6 +673,18 @@
 
   function renderSheet() {
     const root = $("hider-sheet");
+    const room0 = JLNet.room || {};
+    const sig = sheetMode
+      ? JSON.stringify([
+          sheetMode,
+          table.hand.map((c) => c.uid),
+          table.maxHand,
+          (room0.activeCurses || []).map((c) => c.id),
+          room0.pendingQuestion ? room0.pendingQuestion.id : null,
+          room0.phase || null,
+        ])
+      : "";
+    if (!sigChanged("sheet", sig)) return;
     if (!sheetMode) {
       root.hidden = true;
       root.innerHTML = "";
