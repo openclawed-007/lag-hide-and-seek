@@ -84,6 +84,9 @@
     if (bound) return;
     bound = true;
     $("hider").addEventListener("click", onClick);
+    $("hider").addEventListener("change", (e) => {
+      if (e.target && e.target.id === "hider-photo-input") handlePhotoPick(e.target);
+    });
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && sheetMode && !$("hider").hidden) closeSheet();
     });
@@ -125,6 +128,7 @@
       const note = ($("hider-note") && $("hider-note").value) || "";
       answerQuestion(btn.getAttribute("data-answer"), note);
     }
+    if (act === "answer-photo") sendPhotoAnswer();
     if (act === "veto") playResponsePowerup("veto");
     if (act === "randomize") playResponsePowerup("randomize");
     if (act === "open-card") openCard(btn.getAttribute("data-uid"));
@@ -138,11 +142,11 @@
     if (act === "bonus") awardBonus(Number(btn.getAttribute("data-min")) || 0, btn.getAttribute("data-why") || "Curse bonus");
   }
 
-  async function answerQuestion(answer, note) {
+  async function answerQuestion(answer, note, photo) {
     const q = JLNet.room && JLNet.room.pendingQuestion;
     if (!q) return;
     try {
-      await JLNet.send("question.answer", { id: q.id, answer, note });
+      await JLNet.send("question.answer", { id: q.id, answer, note, photo: photo || null });
       const free = table.nextQuestionFree;
       table.nextQuestionFree = false;
       if (!free) beginDraw(q.kind, q.draw, q.keep);
@@ -214,8 +218,10 @@
 
   function confirmKeep() {
     if (!pendingDraw) return;
-    if (pendingDraw.selected.length !== pendingDraw.keep) {
-      return toast("Pick " + pendingDraw.keep + " card" + (pendingDraw.keep > 1 ? "s" : "") + " to keep.");
+    // The deck can run low — never demand more keeps than were actually drawn
+    const required = Math.min(pendingDraw.keep, pendingDraw.cards.length);
+    if (pendingDraw.selected.length !== required) {
+      return toast("Pick " + required + " card" + (required > 1 ? "s" : "") + " to keep.");
     }
     JLDeck.keepFromDrawn(table, pendingDraw.cards, pendingDraw.selected);
     pendingDraw = null;
@@ -541,6 +547,78 @@
 
   let lastBuzzedQuestion = null;
 
+  /* ---------- Photo answers ---------- */
+  let photoDraft = null;
+  let photoDraftQ = null;
+
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        try {
+          const draw = (maxSide, quality) => {
+            const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+            const cv = document.createElement("canvas");
+            cv.width = Math.max(1, Math.round(img.width * scale));
+            cv.height = Math.max(1, Math.round(img.height * scale));
+            cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+            return cv.toDataURL("image/jpeg", quality);
+          };
+          let out = draw(900, 0.6);
+          // Keep the room document well under Firestore's 1MB limit
+          if (out.length > 380000) out = draw(640, 0.5);
+          if (out.length > 380000) out = draw(480, 0.45);
+          resolve(out);
+        } catch (err) {
+          reject(new Error("Could not process that photo."));
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not read that photo."));
+      };
+      img.src = url;
+    });
+  }
+
+  async function handlePhotoPick(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    toast("Preparing photo…");
+    try {
+      photoDraft = await compressImage(file);
+      photoDraftQ = (JLNet.room && JLNet.room.pendingQuestion && JLNet.room.pendingQuestion.id) || null;
+      applyPhotoPreview();
+      toast("Photo ready — hit Send.");
+    } catch (err) {
+      toast(err.message || "Could not read that photo.");
+    }
+  }
+
+  function applyPhotoPreview() {
+    const img = $("hider-photo-preview");
+    const send = $("hider-photo-send");
+    if (!img || !send) return;
+    if (photoDraft) {
+      img.src = photoDraft;
+      img.hidden = false;
+      send.disabled = false;
+    } else {
+      img.hidden = true;
+      send.disabled = true;
+    }
+  }
+
+  async function sendPhotoAnswer() {
+    if (!photoDraft) return toast("Take or choose a photo first.");
+    const note = ($("hider-note") && $("hider-note").value) || "";
+    await answerQuestion("sent", note, photoDraft);
+    photoDraft = null;
+    photoDraftQ = null;
+  }
+
   function renderQuestion() {
     const root = $("hider-question");
     const q = JLNet.room && JLNet.room.pendingQuestion;
@@ -558,19 +636,32 @@
     const opts = (q.options || []).map((o) =>
       `<button type="button" class="btn ${o.primary ? "btn-amber" : "btn-ghost"} btn-block" data-h="answer" data-answer="${escapeHtml(o.id)}">${escapeHtml(o.label)}</button>`
     ).join("");
-    const named = q.kind === "tentacles" || q.kind === "photo";
+    const isTent = q.kind === "tentacles";
+    const isPhoto = q.kind === "photo";
+    if (photoDraftQ && photoDraftQ !== q.id) {
+      photoDraft = null;
+      photoDraftQ = null;
+    }
     root.innerHTML = `
       <div class="kicker">Question · ${escapeHtml(q.cost || "")}</div>
       <h2>${escapeHtml(q.title)}</h2>
       <p class="hint">${escapeHtml(q.hint || q.detail || "Answer truthfully. You may use the internet except Street View.")}</p>
       <div id="hider-deadline" class="deadline"></div>
-      ${named ? `<label class="field"><span>Note for seekers</span><input id="hider-note" placeholder="${q.kind === "tentacles" ? "Named place" : "Sent / cannot"}"></label>
-        <button type="button" class="btn btn-amber btn-block" data-h="answer-note" data-answer="${q.kind === "tentacles" ? "named" : "sent"}">${q.kind === "tentacles" ? "Send the name" : "Photo sent"}</button>` : ""}
+      ${isTent ? `<label class="field"><span>Named place</span><input id="hider-note" placeholder="e.g. Louvre"></label>
+        <button type="button" class="btn btn-amber btn-block" data-h="answer-note" data-answer="named">Send the name</button>` : ""}
+      ${isPhoto ? `<div class="photo-answer">
+        <label class="btn btn-ghost btn-block photo-pick">📷 Take or choose photo<input id="hider-photo-input" type="file" accept="image/*" capture="environment" hidden></label>
+        <img id="hider-photo-preview" class="photo-preview" alt="Your photo" hidden>
+        <label class="field"><span>Note (optional)</span><input id="hider-note" placeholder="Anything to add"></label>
+        <button type="button" id="hider-photo-send" class="btn btn-amber btn-block" data-h="answer-photo" disabled>Send photo to seekers</button>
+        <button type="button" class="btn btn-ghost btn-block" data-h="answer-note" data-answer="sent">Sent outside the app</button>
+      </div>` : ""}
       <div class="answer-grid">${opts}</div>
       <div class="actions">
         ${hasVeto ? `<button type="button" class="btn btn-rose" data-h="veto">Veto</button>` : ""}
         ${hasRand ? `<button type="button" class="btn btn-teal" data-h="randomize">Randomize</button>` : ""}
       </div>`;
+    applyPhotoPreview();
     pulseIn(root);
     if (q.id !== lastBuzzedQuestion) {
       lastBuzzedQuestion = q.id;
@@ -603,10 +694,11 @@
     }
     const wasHidden = root.hidden;
     root.hidden = false;
+    const required = Math.min(pendingDraw.keep, pendingDraw.cards.length);
     root.innerHTML = `
       <div class="kicker">Draw</div>
-      <h2>Keep ${pendingDraw.keep} of ${pendingDraw.cards.length}</h2>
-      <p class="hint">Tap the card${pendingDraw.keep > 1 ? "s" : ""} you want in hand. The rest are discarded.</p>
+      <h2>Keep ${required} of ${pendingDraw.cards.length}</h2>
+      <p class="hint">Tap the card${required > 1 ? "s" : ""} you want in hand. The rest are discarded.</p>
       <div class="card-row">${pendingDraw.cards.map((c) => cardHtml(c, pendingDraw.selected.includes(c.uid), "keep-toggle")).join("")}</div>
       <button type="button" class="btn btn-amber btn-block" data-h="keep-confirm">Keep selected</button>`;
     if (wasHidden) pulseIn(root);
@@ -621,12 +713,17 @@
       : `<p class="empty">Answer a question to draw. Hand limit is ${table.maxHand}.</p>`;
   }
 
+  const CARD_ICONS = { time: "⏱", powerup: "⚡", curse: "🌀" };
+
   function cardHtml(card, on, act) {
     const mins = card.type === "time" ? JLDeck.timeValue(card, size()) : 0;
+    const effect = card.type === "time" ? "Counts if still in hand at the end." : (card.effect || "");
+    const body = effect.length > 92 ? effect.slice(0, 92).trimEnd() + "…" : effect;
     return `<button type="button" class="play-card play-card--${card.type}${on ? " is-on" : ""}" data-h="${act}" data-uid="${card.uid}">
+      <span class="play-card__icon" aria-hidden="true">${CARD_ICONS[card.type] || "🂠"}</span>
       <span class="play-card__type">${JLDeck.typeLabel(card.type)}</span>
       <strong>${escapeHtml(card.type === "time" ? "+" + mins + " min" : card.name)}</strong>
-      <span class="play-card__body">${escapeHtml(card.type === "time" ? "Counts if still in hand at the end." : (card.effect || "").slice(0, 90))}</span>
+      <span class="play-card__body">${escapeHtml(body)}</span>
     </button>`;
   }
 
@@ -735,7 +832,7 @@
       actions = `<button type="button" class="btn btn-teal" data-h="play-power" ${check.ok ? "" : "disabled"}>Play powerup</button>` + actions;
     }
 
-    root.innerHTML = `<div class="sheet__card">
+    root.innerHTML = `<div class="sheet__card sheet__card--${card.type}">
       <div class="kicker">${JLDeck.typeLabel(card.type)}</div>
       <h3>${escapeHtml(card.type === "time" ? "+" + JLDeck.timeValue(card, size()) + " min" : card.name)}</h3>
       <p>${escapeHtml(card.effect || "")}</p>

@@ -354,6 +354,7 @@ def apply_event(room, player, etype, payload):
             "via": "answer" if etype == "question.answer" else ("veto" if etype == "question.veto" else "randomize"),
             "answer": payload.get("answer") or "",
             "note": payload.get("note") or "",
+            "photo": payload.get("photo") or None,
             "apply": pending.get("apply") or {},
             "kind": pending.get("kind"),
             "title": pending.get("title"),

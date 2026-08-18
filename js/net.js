@@ -177,6 +177,7 @@
         via: etype === "question.answer" ? "answer" : (etype === "question.veto" ? "veto" : "randomize"),
         answer: payload.answer || "",
         note: payload.note || "",
+        photo: payload.photo || null,
         apply: pending.apply || {},
         kind: pending.kind,
         title: pending.title,

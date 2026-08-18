@@ -442,8 +442,45 @@
     return null;
   }
 
+  function showHiderPhoto(answer) {
+    let host = document.getElementById("jl-photo");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "jl-photo";
+      host.className = "modal";
+      host.hidden = true;
+      host.innerHTML = `
+        <div class="modal__card modal__card--photo">
+          <div class="kicker">Photo from the hider</div>
+          <h2 id="jl-photo-title"></h2>
+          <img id="jl-photo-img" alt="Photo from the hider">
+          <p class="hint" id="jl-photo-note"></p>
+          <div class="actions actions--end">
+            <button type="button" class="btn btn-amber" data-close>Close</button>
+          </div>
+        </div>`;
+      host.addEventListener("click", (e) => {
+        if (e.target === host || e.target.closest("[data-close]")) host.hidden = true;
+      });
+      document.addEventListener("keydown", (e) => {
+        if (!host.hidden && e.key === "Escape") {
+          e.stopPropagation();
+          host.hidden = true;
+        }
+      }, true);
+      document.body.appendChild(host);
+    }
+    host.querySelector("#jl-photo-title").textContent = answer.title || "Photo";
+    host.querySelector("#jl-photo-img").src = answer.photo;
+    const noteEl = host.querySelector("#jl-photo-note");
+    noteEl.textContent = answer.note || "";
+    noteEl.hidden = !answer.note;
+    host.hidden = false;
+  }
+
   function applyRemoteAnswer(answer) {
     if (!answer) return;
+    if (answer.kind === "photo" && answer.photo) showHiderPhoto(answer);
     if (answer.via === "veto") {
       JLState.applyClip(remaining(), {
         kind: answer.kind,
