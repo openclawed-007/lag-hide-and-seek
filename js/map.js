@@ -6,6 +6,7 @@
   let railLayer;
   let oobLayer;
   let ruledLayer;
+  let flashLayer;
   let previewLayer;
   let stationLayer;
   let pinLayer;
@@ -61,6 +62,7 @@
 
     oobLayer = L.layerGroup().addTo(map);
     ruledLayer = L.layerGroup().addTo(map);
+    flashLayer = L.layerGroup().addTo(map);
     playableOutline = L.geoJSON(null, {
       style: { color: "#f5c15c", weight: 1.5, opacity: 0.85, fill: false, dashArray: "6 8" },
     }).addTo(map);
@@ -100,7 +102,18 @@
     if (g) g.clearLayers();
   }
 
+  let lastPlayableRef = null;
+  let lastRemainingRef = null;
+  let flashTimer = null;
+
   function paintMasks(playable, remaining) {
+    // Nothing changed — keep the current layers (also prevents animation flicker)
+    if (playable === lastPlayableRef && remaining === lastRemainingRef) return;
+    const prevRemaining = lastRemainingRef;
+    const samePlayable = playable === lastPlayableRef;
+    lastPlayableRef = playable;
+    lastRemainingRef = remaining;
+
     clearGroup(oobLayer);
     clearGroup(ruledLayer);
     playableOutline.clearLayers();
@@ -152,6 +165,63 @@
         }).addTo(ruledLayer);
       }
     }
+
+    // Animate the change: flash the area that was just cut (or restored by undo)
+    if (samePlayable && prevRemaining && remaining && prevRemaining !== remaining) {
+      animateRemainingChange(prevRemaining, remaining);
+    }
+  }
+
+  function animateRemainingChange(prev, next) {
+    let diff = null;
+    let isCut = true;
+    try {
+      const prevArea = turf.area(JLGeo.asFeature(prev));
+      const nextArea = turf.area(JLGeo.asFeature(next));
+      const eps = Math.max(prevArea, nextArea, 1) * 0.0005;
+      if (Math.abs(prevArea - nextArea) <= eps) return;
+      isCut = nextArea < prevArea;
+      diff = isCut ? JLGeo.safeDifference(prev, next) : JLGeo.safeDifference(next, prev);
+    } catch { /* ignore */ }
+    if (!diff) return;
+    flashArea(diff, isCut);
+    ensureVisible(diff);
+  }
+
+  function flashArea(feature, isCut) {
+    if (!flashLayer) return;
+    clearGroup(flashLayer);
+    L.geoJSON(JLGeo.asFeature(feature), {
+      style: {
+        color: isCut ? "#ff8ba1" : "#8be8d5",
+        weight: 2,
+        fillColor: isCut ? "#ff5f7e" : "#3dbaa4",
+        fillOpacity: 0.7,
+        interactive: false,
+        className: isCut ? "jl-flash jl-flash--cut" : "jl-flash jl-flash--restore",
+      },
+    }).addTo(flashLayer);
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => clearGroup(flashLayer), 1400);
+  }
+
+  /* Zoom out (never in) just enough to keep a gameplay feature in view */
+  function ensureVisible(feature, opts) {
+    if (!map || !feature) return;
+    try {
+      const b = turf.bbox(JLGeo.asFeature(feature));
+      if (!isFinite(b[0]) || !isFinite(b[3])) return;
+      // Ignore world-spanning shapes (e.g. half-plane fallbacks)
+      if (Math.max(b[2] - b[0], b[3] - b[1]) > 45) return;
+      const target = L.latLngBounds([b[1], b[0]], [b[3], b[2]]);
+      const view = map.getBounds();
+      if (view.pad(-0.04).contains(target)) return;
+      const merged = view.extend(target);
+      const o = Object.assign({ padding: [60, 60], maxZoom: map.getZoom(), duration: 0.9 }, opts || {});
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduce) map.fitBounds(merged, { padding: o.padding, maxZoom: o.maxZoom, animate: false });
+      else map.flyToBounds(merged, o);
+    } catch { /* ignore */ }
   }
 
   function fitPlayable(playable) {
@@ -176,8 +246,10 @@
         fillColor: "#f5c15c",
         fillOpacity: 0.18,
         dashArray: "5 4",
+        className: "jl-preview",
       }, opts || {}),
     }).addTo(previewLayer);
+    ensureVisible(feature);
   }
 
   function showPreviewMulti(features, opts) {
@@ -280,6 +352,7 @@
     setRail,
     paintMasks,
     fitPlayable,
+    ensureVisible,
     clearPreview,
     showPreview,
     showPreviewMulti,
