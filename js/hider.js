@@ -49,12 +49,22 @@
   }
 
   function syncCards() {
-    if (!JLNet.code) return;
-    JLNet.send("cards.sync", {
+    if (!JLNet.code) return Promise.resolve();
+    return JLNet.send("cards.sync", {
       handCount: table.hand.length,
       deckLeft: table.drawPile.length,
       maxHand: table.maxHand,
+      overflowingLeft: table.overflowingLeft || 0,
     }).catch(() => {});
+  }
+
+  function tableSnapshot() {
+    return JSON.stringify(table);
+  }
+
+  function restoreTable(snapshot) {
+    table = JSON.parse(snapshot);
+    persist();
   }
 
   function start() {
@@ -228,6 +238,7 @@
   async function confirmCurse() {
     const card = table.hand.find((c) => c.uid === sheetMode.uid);
     if (!card) return;
+    const beforePlay = tableSnapshot();
     const room = JLNet.room || {};
     const check = JLDeck.canPlayCurse(card, table, room.activeCurses || [], { endgame: room.phase === "endgame" });
     if (!check.ok) return toast(check.why);
@@ -311,13 +322,16 @@
       toast("Played " + played.name);
       render();
     } catch (err) {
+      restoreTable(beforePlay);
       toast(err.message || "Could not play that curse.");
+      render();
     }
   }
 
   async function confirmPower() {
     const card = table.hand.find((c) => c.uid === sheetMode.uid);
     if (!card) return;
+    const beforePlay = tableSnapshot();
     const room = JLNet.room || {};
     const check = JLDeck.canPlayPowerup(card, table, { pending: room.pendingQuestion, endgame: room.phase === "endgame" });
     if (!check.ok) return toast(check.why);
@@ -361,7 +375,10 @@
           move: { minutes: mins, startedAt: Date.now() },
         });
       } catch (err) {
-        toast(err.message);
+        restoreTable(beforePlay);
+        toast(err.message || "Could not play Move.");
+        render();
+        return;
       }
     } else {
       JLDeck.playFromHand(table, card.uid);
@@ -371,7 +388,12 @@
       if (card.defId !== "move") {
         await JLNet.send("powerup.play", { name: card.name, detail: card.effect, maxHand: table.maxHand });
       }
-    } catch { /* already played locally */ }
+    } catch (err) {
+      restoreTable(beforePlay);
+      toast(err.message || "Could not play that powerup.");
+      render();
+      return;
+    }
     persist();
     syncCards();
     closeSheet();

@@ -6,3 +6,5 @@ access.log
 .idea/
 .rooms.json
 __pycache__/
+.firebase/
+firebase-debug.log*

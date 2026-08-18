@@ -151,6 +151,10 @@
 
   function applyLocal(store, etype, payload, playerRole) {
     payload = payload || {};
+    const seekerOnly = new Set(["question.ask", "question.cancel", "meta", "timer"]);
+    const hiderOnly = new Set(["question.answer", "question.veto", "question.randomize", "curse.play", "powerup.play", "cards.sync", "spotty"]);
+    if (seekerOnly.has(etype) && playerRole !== "seeker") throw new Error("Only seekers can do that.");
+    if (hiderOnly.has(etype) && playerRole !== "hider") throw new Error("Only the hider can do that.");
     if (etype === "question.ask") {
       if (store.pendingQuestion) throw new Error("A question is already waiting for an answer.");
       store.pendingQuestion = Object.assign({
@@ -192,7 +196,7 @@
         throw new Error("A curse that blocks questions or transit is already active.");
       }
       store.activeCurses = active.concat([curse]);
-      if (payload.overflowingLeft) store.overflowingLeft = payload.overflowingLeft;
+      if (payload.overflowingLeft != null) store.overflowingLeft = payload.overflowingLeft;
       if (payload.disabledCategory) store.disabledCategory = payload.disabledCategory;
       if (payload.bannedQuestions) store.bannedQuestions = payload.bannedQuestions;
       store.log = (store.log || []).concat([{ kind: "curse", title: curse.name, detail: curse.effect, at: Date.now() }]).slice(-40);
@@ -210,6 +214,7 @@
       if (payload.handCount != null) store.handCount = payload.handCount;
       if (payload.deckLeft != null) store.deckLeft = payload.deckLeft;
       if (payload.maxHand != null) store.maxHand = payload.maxHand;
+      if (payload.overflowingLeft != null) store.overflowingLeft = payload.overflowingLeft;
     } else if (etype === "timer") {
       store.timer = payload;
     } else if (etype === "timer.vote") {
@@ -217,7 +222,7 @@
       const action = payload.action;
       const pauseVotes = Object.assign({ seeker: false, hider: false }, timer.pauseVotes || {});
       const resumeVotes = Object.assign({ seeker: false, hider: false }, timer.resumeVotes || {});
-      const hasHider = (store.hiders || 0) > 0;
+      const hasHider = (store.players || []).some((p) => p.role === "hider") || (store.hiders || 0) > 0;
       const now = Date.now();
       if (action === "pause" && timer.running) {
         pauseVotes[playerRole] = true;
@@ -253,6 +258,7 @@
       store.meta = Object.assign({}, store.meta, payload);
     } else if (etype === "phase") {
       store.phase = payload.phase || store.phase;
+      if (store.phase !== "moving") store.move = null;
     } else if (etype === "spotty") {
       store.disabledCategory = payload.category;
     } else if (etype === "note") {

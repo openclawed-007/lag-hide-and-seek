@@ -9,8 +9,10 @@
       ".git/**",
       "firebase-debug.log",
       "serve.py",
+      "tests/**",
       "certs/**",
-      "access.log"
+      "access.log",
+      "firebase-debug.log*"
     ],
     "headers": [
       {
