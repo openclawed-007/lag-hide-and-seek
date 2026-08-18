@@ -1,19 +1,41 @@
-/* App shell — setup, play UI, keyboard, persist */
+/* App shell — start, join, seeker map, hider hand */
 (function () {
   const $ = (id) => document.getElementById(id);
 
   let mapReady = false;
   let stationLoadTimer = null;
+  let lastHandledAnswer = null;
+  let lastTimerPush = 0;
+  let roomBound = false;
+
+  function hideAll() {
+    ["start", "setup", "join", "hider", "play"].forEach((id) => {
+      if ($(id)) $(id).hidden = true;
+    });
+  }
 
   function boot() {
+    bindStart();
+    bindJoin();
     bindSetup();
     bindChrome();
+    bindInvite();
     JLTools.setOnRender(syncChrome);
     JLState.onChange(syncChrome);
+    JLState.restore();
 
     const params = new URLSearchParams(location.search);
+    const joinCode = (params.get("join") || "").toUpperCase();
     const mapId = params.get("map");
-    if (mapId) {
+
+    if (joinCode) {
+      showJoin(joinCode);
+      if (joinCode.length >= 4) doJoin(joinCode);
+    } else if (params.get("role") === "hide") {
+      showJoin("");
+    } else if (params.get("role") === "seek") {
+      showSetup();
+    } else if (mapId) {
       const preset = JLPresets.PRESETS.find((p) => p.id === mapId);
       if (preset) {
         const size = (params.get("size") || preset.sizeHint || "L").toUpperCase();
@@ -26,20 +48,17 @@
         startFromSetup().then(() => {
           if (params.get("demo") === "1") runDemo(preset);
         });
-        return;
+      } else {
+        resumeIntoGame();
       }
-    }
-
-    const restored = JLState.restore();
-    if (restored && JLState.get().playable) {
-      enterPlay(true);
     } else {
-      showSetup();
+      resumeIntoGame();
     }
 
     setInterval(() => {
       JLState.tickTimer();
       renderTimer();
+      if (JLNet.role === "hider") JLHider.render();
     }, 500);
     noteInsecure();
   }
@@ -49,15 +68,129 @@
     if (window.isSecureContext || host === "localhost" || host === "127.0.0.1") return;
     const bar = document.createElement("div");
     bar.className = "insecure-note";
-    bar.innerHTML = `On a phone, GPS only works over HTTPS. Open <a href="https://${host}:8878${location.pathname}${location.search}">https://${host}:8878</a> and accept the warning.`;
-    (document.querySelector(".setup__inner") || document.body).prepend(bar);
+    bar.innerHTML = `On a phone, GPS and the camera need HTTPS. Open <a href="https://${host}:8878${location.pathname}${location.search}">https://${host}:8878</a> and accept the warning.`;
+    const hostEl = document.querySelector(".start__inner") || document.querySelector(".setup__inner") || document.body;
+    hostEl.prepend(bar);
+  }
+
+  async function resumeIntoGame() {
+    const netOk = await JLNet.resume();
+    if (netOk && JLNet.role === "hider") {
+      bindRoom();
+      JLHider.start();
+      return;
+    }
+    if (JLState.get().playable) {
+      if (netOk && JLNet.role === "seeker") bindRoom();
+      enterPlay(true);
+      return;
+    }
+    showStart();
+  }
+
+  function showStart() {
+    hideAll();
+    $("start").hidden = false;
+    const seekerResume = JLState.get().playable;
+    $("start-resume-seek").hidden = !seekerResume;
+    JLNet.resume().then((ok) => {
+      $("start-resume-hide").hidden = !(ok && JLNet.role === "hider");
+    });
   }
 
   function showSetup() {
+    hideAll();
     $("setup").hidden = false;
-    $("play").hidden = true;
     renderPresetGrid();
     syncSetupForm();
+  }
+
+  function showJoin(prefill) {
+    hideAll();
+    $("join").hidden = false;
+    if (prefill) $("join-code").value = String(prefill).toUpperCase();
+    $("join-code").focus();
+  }
+
+  function bindStart() {
+    $("start-seek").addEventListener("click", showSetup);
+    $("start-hide").addEventListener("click", () => showJoin(""));
+    $("start-resume-seek").addEventListener("click", async () => {
+      if (!JLState.get().playable) return;
+      await ensureSeekerRoom();
+      enterPlay(true);
+    });
+    $("start-resume-hide").addEventListener("click", async () => {
+      const ok = await JLNet.resume();
+      if (!ok) return JLTools.toast("That linked game is gone. Join with the code again.");
+      bindRoom();
+      JLHider.start();
+    });
+  }
+
+  function bindJoin() {
+    $("join-back").addEventListener("click", showStart);
+    $("join-go").addEventListener("click", () => doJoin($("join-code").value));
+    $("join-code").addEventListener("input", (e) => {
+      e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+    });
+    $("join-code").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") doJoin($("join-code").value);
+    });
+    $("join-scan").addEventListener("click", startScan);
+    $("join-scan-stop").addEventListener("click", stopScan);
+  }
+
+  async function doJoin(raw) {
+    const code = JLQR.codeFromText(raw) || String(raw || "").trim().toUpperCase();
+    if (code.length < 4) return JLTools.toast("Enter the 6-character code from the seekers.");
+    $("join-go").disabled = true;
+    $("join-go").textContent = "Joining…";
+    try {
+      await JLNet.join(code, "hider");
+      bindRoom();
+      if (JLNet.room && JLNet.room.meta) {
+        JLState.patch({
+          size: JLNet.room.meta.size || JLState.get().size,
+          units: JLNet.room.meta.units || JLState.get().units,
+          presetName: JLNet.room.meta.presetName || "Linked game",
+        });
+      }
+      JLHider.start();
+      JLTools.toast("You’re in. Wait for the first question.");
+    } catch (err) {
+      JLTools.toast(err.message || "Could not join that game.");
+    } finally {
+      $("join-go").disabled = false;
+      $("join-go").textContent = "Join game";
+    }
+  }
+
+  async function startScan() {
+    const wrap = $("join-camera");
+    const video = $("join-video");
+    wrap.hidden = false;
+    try {
+      const text = await JLQR.scan(video);
+      stopScan();
+      const code = JLQR.codeFromText(text);
+      if (!code) return JLTools.toast("That QR didn’t contain a game code.");
+      $("join-code").value = code;
+      doJoin(code);
+    } catch (err) {
+      stopScan();
+      JLTools.toast(err.message || "Could not open the camera. Type the code instead.");
+    }
+  }
+
+  function stopScan() {
+    JLQR.stopScan();
+    const video = $("join-video");
+    if (video && video.srcObject) {
+      video.srcObject.getTracks().forEach((t) => t.stop());
+      video.srcObject = null;
+    }
+    $("join-camera").hidden = true;
   }
 
   function bindSetup() {
@@ -84,9 +217,12 @@
     $("start-game").addEventListener("click", startFromSetup);
     $("start-custom").addEventListener("click", startCustom);
     $("setup-search").addEventListener("input", renderPresetGrid);
-    $("resume-btn").addEventListener("click", () => {
-      if (JLState.get().playable) enterPlay(true);
+    $("resume-btn").addEventListener("click", async () => {
+      if (!JLState.get().playable) return;
+      await ensureSeekerRoom();
+      enterPlay(true);
     });
+    $("setup-back").addEventListener("click", showStart);
   }
 
   function syncSetupForm() {
@@ -156,13 +292,15 @@
       }
       JLState.patch({ presetId: preset.id, presetName: preset.name });
       JLState.setGeo(poly, poly);
+      await ensureSeekerRoom();
       enterPlay(false);
+      openInvite();
     } catch (err) {
       console.error(err);
       JLTools.toast("Could not load that border. Try again or draw custom.");
     } finally {
       $("start-game").disabled = false;
-      $("start-game").textContent = "Open the map";
+      $("start-game").textContent = "Create game";
       $("setup").classList.remove("is-loading");
     }
   }
@@ -171,13 +309,187 @@
     const worldish = turf.bboxPolygon([-20, 35, 20, 60]);
     JLState.patch({ presetId: "custom", presetName: "Custom" });
     JLState.setGeo(worldish, worldish);
-    enterPlay(false);
-    setTimeout(() => JLTools.activate("draw"), 200);
+    ensureSeekerRoom().then(() => {
+      enterPlay(false);
+      openInvite();
+      setTimeout(() => JLTools.activate("draw"), 200);
+    });
+  }
+
+  async function ensureSeekerRoom() {
+    if (JLNet.code && JLNet.role === "seeker") {
+      bindRoom();
+      pushMeta();
+      return;
+    }
+    const s = JLState.get();
+    try {
+      await JLNet.create({
+        size: s.size,
+        units: s.units,
+        presetName: s.presetName,
+        presetId: s.presetId,
+      });
+      lastHandledAnswer = null;
+      try { sessionStorage.removeItem("lag-last-answer"); } catch { /* ignore */ }
+      bindRoom();
+    } catch (err) {
+      console.warn(err);
+      JLTools.toast("Playing on this device only — run serve.py so a hider can join.");
+    }
+  }
+
+  function bindRoom() {
+    if (roomBound) return;
+    roomBound = true;
+    JLNet.onChange(onRoom);
+  }
+
+  function pushMeta() {
+    const s = JLState.get();
+    if (!JLNet.code) return;
+    JLNet.send("meta", {
+      size: s.size,
+      units: s.units,
+      presetName: s.presetName,
+      presetId: s.presetId,
+    }).catch(() => {});
+  }
+
+  function onRoom(snap) {
+    const room = snap.room;
+    renderInvite(room);
+    renderSeekerBanners(room);
+    if (JLNet.role === "seeker") {
+      renderLinkPill(room);
+      if (room && room.timer) applyRoomTimer(room.timer);
+    }
+    if (JLNet.role === "hider") JLHider.render();
+    const ans = room && room.lastAnswer;
+    if (JLNet.role === "seeker" && ans && ans.questionId && ans.questionId !== lastHandledAnswer) {
+      lastHandledAnswer = ans.questionId;
+      try { sessionStorage.setItem("lag-last-answer", lastHandledAnswer); } catch { /* ignore */ }
+      JLTools.applyRemoteAnswer(ans);
+    }
+  }
+
+  function renderLinkPill(room) {
+    const el = $("seeker-link");
+    if (!el) return;
+    if (!JLNet.code) {
+      el.textContent = "Solo";
+      el.className = "link-pill";
+      return;
+    }
+    if (room && room.hiderOnline) {
+      el.textContent = "Hider live · " + JLNet.code;
+      el.className = "link-pill is-on";
+    } else {
+      el.textContent = "Waiting for hider · " + JLNet.code;
+      el.className = "link-pill is-wait";
+    }
+  }
+
+  function renderSeekerBanners(room) {
+    const bar = $("seeker-banner");
+    if (!bar) return;
+    if (!room) {
+      bar.hidden = true;
+      bar.innerHTML = "";
+      return;
+    }
+    const bits = [];
+    if (room.pendingQuestion) {
+      bits.push(`<div class="banner-card is-wait"><b>Waiting for the hider</b><span>${escapeHtml(room.pendingQuestion.title)}</span></div>`);
+    }
+    (room.activeCurses || []).forEach((c) => {
+      bits.push(`<div class="banner-card is-curse"><b>${escapeHtml(c.name)}</b><span>${escapeHtml(c.effect)}</span>
+        <button type="button" class="btn btn-ghost" data-clear-curse="${escapeHtml(c.id)}" data-clear-name="${escapeHtml(c.name)}">We cleared it</button></div>`);
+    });
+    if (room.disabledCategory) {
+      bits.push(`<div class="banner-card"><b>Spotty Memory</b><span>${escapeHtml(room.disabledCategory)} questions are disabled until you ask something else.</span></div>`);
+    }
+    if (room.move) {
+      bits.push(`<div class="banner-card is-wait"><b>Hider is moving</b><span>Stay put for ${room.move.minutes} minutes. They will tell you their original station.</span></div>`);
+    }
+    const timer = room.timer || {};
+    if (timer.pauseVotes && timer.running && (timer.pauseVotes.seeker || timer.pauseVotes.hider)) {
+      const who = timer.pauseVotes.seeker && timer.pauseVotes.hider
+        ? "Both sides"
+        : (timer.pauseVotes.seeker ? "Seekers are waiting for the hider" : "The hider is waiting for seekers");
+      bits.push(`<div class="banner-card is-wait"><b>Pause requested</b><span>${who} to confirm before the clock stops.</span></div>`);
+    }
+    if (timer.resumeVotes && !timer.running && (timer.resumeVotes.seeker || timer.resumeVotes.hider)) {
+      const who = timer.resumeVotes.seeker && timer.resumeVotes.hider
+        ? "Both sides"
+        : (timer.resumeVotes.seeker ? "Seekers are waiting for the hider" : "The hider is waiting for seekers");
+      bits.push(`<div class="banner-card is-wait"><b>Resume requested</b><span>${who} to confirm before the clock starts again.</span></div>`);
+    }
+    bar.innerHTML = bits.join("");
+    bar.hidden = !bits.length;
+    bar.querySelectorAll("[data-clear-curse]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        JLNet.send("curse.clear", { id: btn.getAttribute("data-clear-curse"), name: btn.getAttribute("data-clear-name") }).catch((err) => JLTools.toast(err.message));
+      });
+    });
+  }
+
+  async function askHider(q) {
+    if (!JLNet.code) return JLTools.toast("Create the game from the home screen so a hider can join.");
+    try {
+      await JLNet.send("question.ask", q);
+      JLTools.toast("Sent to the hider.");
+    } catch (err) {
+      JLTools.toast(err.message || "Could not send that question.");
+    }
+  }
+
+  function bindInvite() {
+    $("btn-invite").addEventListener("click", openInvite);
+    $("seeker-link").addEventListener("click", openInvite);
+    $("invite-close").addEventListener("click", () => { $("invite").hidden = true; });
+    $("invite-copy").addEventListener("click", async () => {
+      const url = JLNet.joinUrl();
+      try {
+        await navigator.clipboard.writeText(url);
+        JLTools.toast("Join link copied.");
+      } catch {
+        JLTools.toast(url);
+      }
+    });
+    $("invite").addEventListener("click", (e) => {
+      if (e.target.id === "invite") $("invite").hidden = true;
+    });
+  }
+
+  function openInvite() {
+    if (!JLNet.code) {
+      ensureSeekerRoom().then(() => {
+        renderInvite(JLNet.room);
+        $("invite").hidden = false;
+      });
+      return;
+    }
+    renderInvite(JLNet.room);
+    $("invite").hidden = false;
+  }
+
+  function renderInvite(room) {
+    if (!JLNet.code) return;
+    $("invite-code").textContent = JLNet.code;
+    $("invite-url").textContent = JLNet.joinUrl();
+    JLQR.draw($("invite-qr"), JLNet.joinUrl());
+    const st = $("invite-status");
+    if (JLNet.mode === "local") st.textContent = "This tab can share the game with another tab. For a second phone, run python3 serve.py and open that address.";
+    else if (room && room.hiderOnline) st.textContent = "Hider is connected.";
+    else if (room && room.hiders > 0) st.textContent = "Hider joined — they may be in the background.";
+    else st.textContent = "Waiting for the hider to scan or type this code.";
   }
 
   function enterPlay(fromRestore) {
-    $("setup").hidden = true;
+    hideAll();
     $("play").hidden = false;
+    try { lastHandledAnswer = sessionStorage.getItem("lag-last-answer"); } catch { /* ignore */ }
     const preset = JLPresets.PRESETS.find((p) => p.id === JLState.get().presetId);
     if (preset && preset.center) {
       window.__jlStartView = { center: preset.center, zoom: preset.zoom || 6 };
@@ -198,7 +510,7 @@
         renderStations();
         scheduleStationLoad();
       });
-      ["jl-inspector", "toggle-log", "drawer", "btn-locate"].forEach((id) => {
+      ["jl-inspector", "toggle-log", "drawer", "btn-locate", "invite", "seeker-banner"].forEach((id) => {
         const n = $(id);
         if (n && window.L) {
           L.DomEvent.disableClickPropagation(n);
@@ -227,7 +539,11 @@
     requestAnimationFrame(() => requestAnimationFrame(frame));
     setTimeout(frame, 120);
     syncChrome();
+    renderLinkPill(JLNet.room);
+    renderSeekerBanners(JLNet.room);
     scheduleStationLoad(true);
+    pushMeta();
+    ensureTimerRunning();
   }
 
   function bindChrome() {
@@ -253,9 +569,9 @@
       }
     });
     $("btn-new").addEventListener("click", () => {
-      if (!confirm("Leave this game and pick a new map?")) return;
+      if (!confirm("Leave this map and go home?")) return;
       JLTools.cancel();
-      showSetup();
+      showStart();
     });
     $("btn-reset").addEventListener("click", () => {
       if (!confirm("Reset remaining area back to the full map? Question log stays.")) return;
@@ -274,6 +590,7 @@
     $("btn-locate").addEventListener("click", locateMe);
     $("btn-load-stations").addEventListener("click", () => loadStations(true));
     $("btn-timer").addEventListener("click", toggleTimer);
+    $("btn-end-hide").addEventListener("click", endHidePeriod);
     $("toggle-rail").addEventListener("change", (e) => {
       JLState.patch({ layers: Object.assign({}, JLState.get().layers, { rail: e.target.checked }) });
       JLMap.setRail(e.target.checked);
@@ -314,7 +631,10 @@
     $("station-search").addEventListener("input", renderStationList);
 
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") JLTools.cancel();
+      if (e.key === "Escape") {
+        if (!$("invite").hidden) { $("invite").hidden = true; return; }
+        JLTools.cancel();
+      }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         $("btn-undo").click();
@@ -328,12 +648,74 @@
     });
   }
 
+  function linkedGame() {
+    return !!(JLNet.code && JLNet.hasHider());
+  }
+
+  function ensureTimerRunning() {
+    const t = JLState.get().timer;
+    if (t.phase && t.phase !== "idle") return;
+    JLState.startHidePeriod();
+    pushTimer();
+  }
+
+  function pushTimer() {
+    lastTimerPush = Date.now();
+    if (JLNet.code) JLNet.send("timer", JLState.get().timer).catch(() => {});
+  }
+
+  function applyRoomTimer(rt) {
+    if (!rt || !rt.phase) return;
+    const local = JLState.get().timer;
+    const same =
+      local.running === rt.running &&
+      local.phase === rt.phase &&
+      JSON.stringify(local.pauseVotes || {}) === JSON.stringify(rt.pauseVotes || {}) &&
+      JSON.stringify(local.resumeVotes || {}) === JSON.stringify(rt.resumeVotes || {});
+    if (same) return;
+    const next = Object.assign({}, local, rt);
+    if (next.running) {
+      if (next.phase === "hiding") next.hideStartedAt = Date.now() - (next.hideElapsedMs || 0);
+      if (next.phase === "seeking") next.seekStartedAt = Date.now() - (next.seekElapsedMs || 0);
+    } else {
+      next.hideStartedAt = null;
+      next.seekStartedAt = null;
+    }
+    JLState.patch({ timer: next });
+  }
+
+  function endHidePeriod() {
+    const t = JLState.get().timer;
+    if (t.phase !== "hiding") return;
+    if (!confirm("End the hiding period and start the seek clock?")) return;
+    JLState.startSeekClock();
+    pushTimer();
+  }
+
   function toggleTimer() {
     const t = JLState.get().timer;
-    if (t.phase === "idle") JLState.startHidePeriod();
-    else if (t.phase === "hiding" && t.running) {
-      if (confirm("End the hiding period and start the seek clock?")) JLState.startSeekClock();
-    } else if (t.running) JLState.pauseTimer();
+    if (!t.phase || t.phase === "idle") {
+      JLState.startHidePeriod();
+      pushTimer();
+      return;
+    }
+    const action = t.running ? "pause" : "resume";
+    const both = linkedGame();
+    const msg = t.running
+      ? (both
+        ? "Pause the clock? It only stops after both the hider and the seekers confirm."
+        : "Pause the clock?")
+      : (both
+        ? "Resume the clock? It only starts again after both sides confirm."
+        : "Resume the clock?");
+    if (!confirm(msg)) return;
+    if (JLNet.code) {
+      JLNet.send("timer.vote", { action }).catch((err) => JLTools.toast(err.message));
+      if (!both) {
+        if (action === "pause") JLState.pauseTimer();
+        else JLState.resumeTimer();
+      }
+    } else if (action === "pause") JLState.pauseTimer();
     else JLState.resumeTimer();
   }
 
@@ -341,7 +723,10 @@
     const t = JLState.get().timer;
     const el = $("timer-readout");
     const btn = $("btn-timer");
-    if (!el) return;
+    const endBtn = $("btn-end-hide");
+    if (!el || !btn) return;
+    const votes = t.running ? (t.pauseVotes || {}) : (t.resumeVotes || {});
+    if (endBtn) endBtn.hidden = !(t.phase === "hiding" && t.running);
     if (t.phase === "idle") {
       el.textContent = "Timer";
       btn.textContent = "Start hide";
@@ -350,15 +735,22 @@
     if (t.phase === "hiding") {
       const left = Math.max(0, (t.hideDurationMs || 0) - (t.hideElapsedMs || 0));
       el.textContent = "Hide " + JLState.formatDuration(left);
-      btn.textContent = t.running ? "Begin seek" : "Resume";
-      if (t.running && left <= 0) JLState.startSeekClock();
-      return;
+      if (t.running && left <= 0) {
+        JLState.startSeekClock();
+        pushTimer();
+      }
+    } else {
+      el.textContent = JLState.formatDuration(t.seekElapsedMs || 0);
     }
-    el.textContent = JLState.formatDuration(t.seekElapsedMs || 0);
-    btn.textContent = t.running ? "Pause" : "Resume";
+    if (t.running) {
+      btn.textContent = votes.seeker ? "Waiting…" : "Pause";
+    } else {
+      btn.textContent = votes.seeker ? "Waiting…" : "Resume";
+    }
   }
 
   function syncChrome() {
+    if ($("play").hidden) return;
     const s = JLState.get();
     $("hud-region").textContent = s.presetName || "Map";
     $("hud-size").textContent = JLQuestions.SIZES[s.size].label;
@@ -371,8 +763,10 @@
     document.querySelectorAll("[data-tool]").forEach((b) => {
       b.classList.toggle("is-on", b.getAttribute("data-tool") === JLTools.current());
     });
-    JLMap.paintMasks(s.playable, s.remaining);
-    JLMap.renderZones(s.hidingZones);
+    if (window.JLMap) {
+      JLMap.paintMasks(s.playable, s.remaining);
+      JLMap.renderZones(s.hidingZones);
+    }
     renderStations();
     renderLog();
     renderBook();
@@ -382,7 +776,7 @@
   function renderStations() {
     const s = JLState.get();
     if (!$("toggle-stations").checked) {
-      JLMap.renderStations([], s.remaining, null);
+      if (window.JLMap) JLMap.renderStations([], s.remaining, null);
       renderStationList();
       return;
     }
@@ -444,15 +838,17 @@
   }
 
   function renderLog() {
-    const log = JLState.get().log.slice().reverse();
-    $("log-list").innerHTML = log.map((e) => `
+    const local = JLState.get().log.slice().reverse();
+    const remote = ((JLNet.room && JLNet.room.log) || []).slice().reverse();
+    const merged = local.length ? local : remote;
+    $("log-list").innerHTML = merged.map((e) => `
       <article class="log-item log-item--${e.kind || "note"}">
         <div class="log-item__kind">${escapeHtml((e.kind || "note").toUpperCase())}</div>
         <h4>${escapeHtml(e.title || "")}</h4>
-        <p>${escapeHtml(e.answer || "")}${e.nullAnswer ? " · null" : ""}</p>
+        <p>${escapeHtml(e.answer || e.detail || "")}${e.nullAnswer ? " · null" : ""}</p>
         <footer>${escapeHtml(e.cost || "")}</footer>
       </article>
-    `).join("") || `<p class="empty">Ask a radar, thermometer, measuring, matching, tentacle, or photo question. Cuts land here.</p>`;
+    `).join("") || `<p class="empty">Ask a question. If a hider is linked, it goes to their phone first.</p>`;
   }
 
   function renderBook() {
@@ -561,6 +957,8 @@
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 5000 }
     );
   }
+
+  window.JLApp = { askHider };
 
   document.addEventListener("DOMContentLoaded", boot);
 })();

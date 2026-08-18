@@ -1,30 +1,59 @@
-# LAG — Hide + Seek map
+# LAG — Hide + Seek
 
-A fan-made map companion for **Jet Lag: The Game — Hide + Seek**.
-
-Pick a country or metro, cut everything outside the agreed borders, then shrink the remaining ground with the official question tools: radar, thermometer, measuring, matching, tentacles, and photos.
+A fan-made companion for **Jet Lag: The Game — Hide + Seek**. Seekers run the map. The hider joins with a QR code or a six-character room code, answers questions on their phone, draws from an official-style deck, and plays curses.
 
 Not affiliated with Wendover Productions or Nebula.
 
-## Run it
+## Live site
 
-Any static server. From this folder:
+The production game runs on Firebase Hosting with Firestore room sync:
+
+https://translate-python-372617.web.app
+
+Linked games work across phones without running a local server. Firebase Hosting supplies HTTPS for GPS, camera access, and QR join links.
+
+## Run locally
+
+For local development, either use the Firebase emulator or the included LAN server:
 
 ```bash
-python3 -m http.server 8877
+firebase emulators:start
+# or
+python3 serve.py
 ```
 
-Then open http://127.0.0.1:8877
+The LAN server remains available as a fallback at http://127.0.0.1:8877 and HTTPS port 8878.
 
-Deep links: `/?map=switzerland`, `/?map=japan&size=L`, `/?map=london&units=km`.
+Deep links: `/?map=switzerland`, `/?map=japan&size=L`, `/?join=K7M2QX`.
 
-## How to play on the map
+## How a linked game works
 
-1. Choose a **show map**, metro, or country. Set Small / Medium / Large.
-2. **Open the map**. Out-of-bounds land is masked. Rail is an OpenRailwayMap overlay on OSM roads.
+1. **Seekers** choose Host the map, pick a country or metro, set Small / Medium / Large, then **Create game**.
+2. An invite card shows a **QR code** and a **6-character code**. The hider scans the QR or types the code.
+3. Seekers ask a radar, thermometer, measuring, matching, tentacle, or photo question and tap **Ask the hider**.
+4. The hider answers on their phone (or plays Veto / Randomize). The seekers’ map updates from that answer.
+5. After answering, the hider **draws and keeps** the official number of cards, then can play curses and powerups.
+
+You can still apply an answer yourself if you already have it, or play the map solo.
+
+## Hider deck
+
+The in-app deck follows the community transcription of the official rulebook:
+
+- Time bonuses (S / M / L values) count only if they are still in hand at the end
+- Powerups: Veto, Randomize, discard/draw, expand hand, Duplicate, Move
+- All 24 standard curses, including casting costs and the “one blocking curse at a time” rule
+- Hand limit 6 (or 7–8 after the expand powerup)
+- Overflowing Chalice adds one extra draw for the next three questions
+
+Rules reference: https://jetlag.denull.ru/en/rules/
+
+## Map tools
+
+1. Choose a show map, metro, or country.
+2. Out-of-bounds land is masked. Rail is an OpenRailwayMap overlay on OSM roads.
 3. Zoom in and **Load stations in view** (or wait — it loads automatically past zoom 9).
-4. Ask a question with the left tools, click the seeker position, pick the official answer, apply.
-5. Ruled-out ground turns rose. The question log records wording and card cost so you can draw from a physical or official digital deck.
+4. Ask with the left tools. If a hider is linked, wait for their answer; otherwise apply it yourself.
 
 Keyboard: `1–6` tools, `Esc` cancel, `⌘/Ctrl+Z` undo.
 
@@ -34,7 +63,3 @@ Keyboard: `1–6` tools, `Esc` cancel, `⌘/Ctrl+Z` undo.
 - Roads: CARTO Voyager / Dark Matter (OSM)
 - Rail: OpenRailwayMap
 - Stations & POIs: Overpass API
-
-## Rules
-
-Question list, costs, and size gates follow the community transcription of the official Hide + Seek rulebook: https://jetlag.denull.ru/en/rules/

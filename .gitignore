@@ -4,3 +4,5 @@ access.log
 *.pem
 .vscode/
 .idea/
+.rooms.json
+__pycache__/

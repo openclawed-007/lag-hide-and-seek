@@ -22,6 +22,8 @@
         seekStartedAt: null,
         seekElapsedMs: 0,
         running: false,
+        pauseVotes: { seeker: false, hider: false },
+        resumeVotes: { seeker: false, hider: false },
       },
       layers: { rail: true, roads: true, stations: true, dark: true },
     };
@@ -146,6 +148,8 @@
       seekStartedAt: null,
       seekElapsedMs: 0,
       running: true,
+      pauseVotes: { seeker: false, hider: false },
+      resumeVotes: { seeker: false, hider: false },
     };
     persist();
     emit();
@@ -218,9 +222,15 @@
       if (!raw) return false;
       const data = JSON.parse(raw);
       if (!data || data.version !== 1) return false;
-      state = Object.assign(empty(), data, {
-        timer: Object.assign(empty().timer, data.timer, { running: false, hideStartedAt: null, seekStartedAt: null }),
-      });
+      const timer = Object.assign(empty().timer, data.timer || {});
+      if (timer.running) {
+        if (timer.phase === "hiding") {
+          timer.hideStartedAt = Date.now() - (timer.hideElapsedMs || 0);
+        } else if (timer.phase === "seeking") {
+          timer.seekStartedAt = Date.now() - (timer.seekElapsedMs || 0);
+        }
+      }
+      state = Object.assign(empty(), data, { timer });
       emit();
       return true;
     } catch {

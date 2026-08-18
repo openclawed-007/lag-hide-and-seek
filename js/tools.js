@@ -84,6 +84,7 @@
     JLMap.clearPreview();
     JLMap.clearPins();
     JLMap.getMap()?.getContainer().classList.remove("is-picking");
+    setInspector("");
     onNeedRender();
   }
 
@@ -185,6 +186,7 @@
         setTimeout(() => { btn._jlLock = false; }, 400);
         const act = btn.getAttribute("data-act");
         if (act === "cancel") cancel();
+        else if (act === "ask") sendAsk(active);
         else if (act === "gps") {
           toast("Finding you…");
           locateHere((ll) => applyHere(ll), { fresh: true });
@@ -213,6 +215,211 @@
       return `<option value="${v}"${sel}>${o.label}</option>`;
     }).join("");
     return `<label class="field"><span>${name}</span><select data-field="${name.toLowerCase().replace(/\s+/g, "-")}">${opts}</select></label>`;
+  }
+
+  function linked() {
+    return !!(window.JLNet && JLNet.hasHider());
+  }
+
+  function askRow(options, opts) {
+    opts = opts || {};
+    const top = [];
+    if (!opts.noGps) {
+      top.push(`<button class="btn btn-ghost" data-act="gps" type="button">${opts.gpsLabel || "Use my location"}</button>`);
+    }
+    top.push(`<button class="btn btn-ghost" data-act="cancel" type="button">Cancel</button>`);
+    if (linked()) {
+      top.push(`<button class="btn btn-amber" data-act="ask" type="button">Ask the hider</button>`);
+      return `<div class="actions">${top.join("")}</div>`;
+    }
+    const apply = (options || []).map((o) =>
+      `<button class="btn ${o.cls || "btn-ghost"}" data-act="${o.act}" type="button">${o.label}</button>`
+    ).join("");
+    return `<div class="actions">${top.join("")}</div><div class="actions">${apply}</div>`;
+  }
+
+  function waitingInspector(title) {
+    setInspector(`
+      <header><div class="kicker">Waiting on the hider</div>
+      <h3>${escapeHtml(title)}</h3></header>
+      <p class="hint">This is on their phone. The map updates when they answer — or they veto / randomize.</p>`);
+  }
+
+  function sendAsk(kind) {
+    if (window.JLNet && JLNet.room && JLNet.room.pendingQuestion) {
+      return toast("A question is already waiting for an answer.");
+    }
+    const room = window.JLNet && JLNet.room;
+    if (room && room.disabledCategory === kind) {
+      return toast("Spotty Memory has " + kind + " questions disabled until the next ask.");
+    }
+    if (room && (room.bannedQuestions || []).some((b) => String(b).startsWith(kind + ":"))) {
+      toast("Drained Brain banned some " + kind + " questions — don’t reuse a banned one.");
+    }
+    if (room && JLDeck && JLDeck.blockingActive(room.activeCurses || [])) {
+      const block = (room.activeCurses || []).find((c) => c.blocksQuestions);
+      if (block) toast(block.name + " is still blocking questions unless they have cleared it.");
+    }
+    const q = buildQuestion(kind);
+    if (!q) return;
+    if (!window.JLApp || !JLApp.askHider) return toast("Start a linked game from the home screen first.");
+    JLApp.askHider(q);
+    waitingInspector(q.title);
+  }
+
+  function buildQuestion(kind) {
+    const cost = JLQuestions.COSTS[kind];
+    if (!cost) return null;
+    const extra = !!(window.JLNet && JLNet.room && JLNet.room.overflowingLeft > 0);
+    const draw = cost.draw + (extra ? 1 : 0);
+    const keep = cost.keep;
+    const mins = kind === "photo" ? (JLQuestions.SIZES[JLState.get().size].photoSeconds / 60) : 5;
+    const base = {
+      kind,
+      cost: `Draw ${draw}, keep ${keep}`,
+      draw,
+      keep,
+      deadline: Date.now() + mins * 60 * 1000,
+      apply: {
+        tool: kind,
+        draft: Object.assign({}, draft),
+        clicks: clicks.map((c) => ({ lat: c.lat, lng: c.lng })),
+      },
+    };
+    if (kind === "radar") {
+      if (!clicks[0]) { toast("Pin your location first."); return null; }
+      const miles = Number(draft.miles === "custom" ? draft.custom : draft.miles);
+      if (!miles) { toast("Pick a radius."); return null; }
+      return Object.assign(base, {
+        title: JLQuestions.promptFor("radar", milesLabel(miles)),
+        detail: milesLabel(miles),
+        hint: "Radar is your current spot, not your hiding zone.",
+        options: [
+          { id: "yes", label: "Yes — I am inside", primary: true },
+          { id: "no", label: "No — I am outside" },
+        ],
+      });
+    }
+    if (kind === "thermometer") {
+      if (clicks.length < 2) { toast("Set a start and an end first."); return null; }
+      const need = Number(draft.min || 0);
+      const traveled = JLGeo.distMiles(clicks[0], clicks[1]);
+      if (need && traveled + 0.02 < need) {
+        toast(`This thermometer needs at least ${milesLabel(need)} (you’ve gone ${milesLabel(round1(traveled))}).`);
+        return null;
+      }
+      return Object.assign(base, {
+        title: JLQuestions.promptFor("thermometer", milesLabel(need || traveled)),
+        detail: `${milesLabel(round1(traveled))} traveled`,
+        hint: "Hotter means they moved closer to you.",
+        options: [
+          { id: "hotter", label: "Hotter", primary: true },
+          { id: "colder", label: "Colder" },
+        ],
+      });
+    }
+    if (kind === "measuring") {
+      if (!clicks[0]) { toast("Pin your location first."); return null; }
+      const subject = draft.subject || "airport";
+      return Object.assign(base, {
+        title: JLQuestions.promptFor("measuring", labelOf(JLQuestions.MEASURING, subject)),
+        detail: subject,
+        hint: "Compared to the seekers, closer or further from that feature.",
+        options: [
+          { id: "closer", label: "Closer", primary: true },
+          { id: "further", label: "Further" },
+        ],
+      });
+    }
+    if (kind === "matching") {
+      if (!clicks[0]) { toast("Pin your location first."); return null; }
+      const subject = draft.subject || "airport";
+      return Object.assign(base, {
+        title: JLQuestions.promptFor("matching", labelOf(JLQuestions.MATCHING, subject)),
+        detail: subject,
+        hint: "Is your nearest the same as theirs?",
+        options: [
+          { id: "yes", label: "Yes — same as you", primary: true },
+          { id: "no", label: "No — different" },
+        ],
+      });
+    }
+    if (kind === "tentacles") {
+      if (JLState.get().size === "S") { toast("Tentacles are not used in Small games."); return null; }
+      if (!clicks[0]) { toast("Pin your location first."); return null; }
+      const list = JLQuestions.tentaclesFor(JLState.get().size);
+      const spec = list.find((t) => t.id === draft.tentacle) || list[0];
+      if (!spec) return null;
+      return Object.assign(base, {
+        title: JLQuestions.promptFor("tentacles", { label: spec.label, miles: milesLabel(spec.miles) }),
+        detail: spec.id,
+        hint: "Name the nearest one if you are within reach, otherwise say you are not.",
+        options: [{ id: "miss", label: "Not within reach" }],
+      });
+    }
+    if (kind === "photo") {
+      const list = JLQuestions.photosFor(JLState.get().size);
+      const spec = list.find((p) => p.id === draft.photo) || list[0];
+      if (!spec) return null;
+      return Object.assign(base, {
+        title: JLQuestions.promptFor("photo", spec.label),
+        detail: spec.label,
+        hint: spec.tip || "No Street View. Send the photo in your usual chat.",
+        options: [{ id: "cannot", label: "I cannot answer" }],
+      });
+    }
+    return null;
+  }
+
+  function applyRemoteAnswer(answer) {
+    if (!answer) return;
+    if (answer.via === "veto") {
+      JLState.applyClip(remaining(), {
+        kind: answer.kind,
+        title: answer.title,
+        answer: "Vetoed",
+        cost: "No cards",
+      });
+      cancel();
+      toast("Hider vetoed. No map change.");
+      return;
+    }
+    if (answer.via === "randomize") {
+      toast("Hider randomized. Ask a different " + (answer.kind || "") + " question — the original is not used.");
+      if (answer.kind) activate(answer.kind);
+      return;
+    }
+    const apply = answer.apply || {};
+    const tool = apply.tool || answer.kind;
+    draft = Object.assign({}, apply.draft || {});
+    clicks = (apply.clicks || []).map((c) => ({ lat: c.lat, lng: c.lng }));
+    if (clicks[0]) {
+      JLMap.clearPins();
+      clicks.forEach((c, i) => JLMap.addPin(c, i === 0 ? "Start" : "End"));
+    }
+    active = tool;
+    const a = String(answer.answer || "").toLowerCase();
+    let act = a;
+    if (tool === "radar" || tool === "matching") act = a === "yes" ? "yes" : "no";
+    else if (tool === "thermometer") act = a === "hotter" ? "hotter" : "colder";
+    else if (tool === "measuring") act = a === "closer" ? "closer" : "further";
+    else if (tool === "tentacles") {
+      if (a === "miss") act = "miss";
+      else {
+        draft.which = answer.note || answer.answer;
+        act = "named";
+      }
+    } else if (tool === "photo") act = a === "cannot" ? "cannot" : "sent";
+    if (tools[tool] && tools[tool].act && act) tools[tool].act(act);
+    else {
+      JLState.applyClip(remaining(), {
+        kind: answer.kind,
+        title: answer.title,
+        answer: [answer.answer, answer.note].filter(Boolean).join(" · "),
+        cost: answer.cost,
+      });
+      cancel();
+    }
   }
 
   /* ---------- RADAR ---------- */
@@ -261,12 +468,10 @@
       <p class="hint">Centered on <em>you</em> (GPS). Radar is the hider’s current spot, not their zone.</p>
       ${sel("Miles", opts, draft.miles || "5")}
       ${custom}
-      <div class="actions">
-        <button class="btn btn-ghost" data-act="gps" type="button">Use my location</button>
-        <button class="btn btn-ghost" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-rose" data-act="no" type="button">No — cut inside</button>
-        <button class="btn btn-amber" data-act="yes" type="button">Yes — keep inside</button>
-      </div>`);
+      ${askRow([
+        { act: "no", label: "No — cut inside", cls: "btn-rose" },
+        { act: "yes", label: "Yes — keep inside", cls: "btn-amber" },
+      ])}`);
     draft.miles = draft.miles || "5";
   }
 
@@ -323,12 +528,10 @@
       <p class="hint">Starts on your GPS. Travel, then tap <em>End at my location</em>. Hotter = you moved closer.</p>
       ${sel("Min", opts, draft.min || allowed[0])}
       <div class="stat">${clicks.length < 2 ? (clicks.length === 1 ? "Start pinned. Travel, then use my location again." : "Finding you for the start…") : `Traveled ${milesLabel(round1(traveled))} as the crow flies.`}</div>
-      <div class="actions">
-        <button class="btn btn-ghost" data-act="gps" type="button">${clicks.length === 1 ? "End at my location" : "Start at my location"}</button>
-        <button class="btn btn-ghost" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-rose" data-act="colder" type="button">Colder</button>
-        <button class="btn btn-amber" data-act="hotter" type="button">Hotter</button>
-      </div>`);
+      ${askRow([
+        { act: "colder", label: "Colder", cls: "btn-rose" },
+        { act: "hotter", label: "Hotter", cls: "btn-amber" },
+      ], { gpsLabel: clicks.length === 1 ? "End at my location" : "Start at my location" })}`);
     draft.min = draft.min || String(allowed[0]);
   }
 
@@ -451,12 +654,10 @@
       <p class="hint">${meta?.tip || "Measure to the map icon. Features outside the map do not exist."}</p>
       ${sel("Subject", opts, draft.subject || "airport")}
       <div class="stat">${clicks[0] ? "Using your location. Apply when you have an answer." : "Finding you…"}</div>
-      <div class="actions">
-        <button class="btn btn-ghost" data-act="gps" type="button">Use my location</button>
-        <button class="btn btn-ghost" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-rose" data-act="further" type="button">Further</button>
-        <button class="btn btn-amber" data-act="closer" type="button">Closer</button>
-      </div>`);
+      ${askRow([
+        { act: "further", label: "Further", cls: "btn-rose" },
+        { act: "closer", label: "Closer", cls: "btn-amber" },
+      ])}`);
     draft.subject = draft.subject || "airport";
   }
 
@@ -568,12 +769,10 @@
       <h3>Is your nearest ${meta ? meta.label.toLowerCase() : "…"} the same as mine?</h3></header>
       <p class="hint">${meta?.tip || "Features outside the map do not exist. Null still awards cards."}</p>
       ${sel("Subject", opts, draft.subject || "airport")}
-      <div class="actions">
-        <button class="btn btn-ghost" data-act="gps" type="button">Use my location</button>
-        <button class="btn btn-ghost" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-rose" data-act="no" type="button">No — cut my cell</button>
-        <button class="btn btn-amber" data-act="yes" type="button">Yes — keep my cell</button>
-      </div>`);
+      ${askRow([
+        { act: "no", label: "No — cut my cell", cls: "btn-rose" },
+        { act: "yes", label: "Yes — keep my cell", cls: "btn-amber" },
+      ])}`);
     draft.subject = draft.subject || "airport";
   }
 
@@ -687,12 +886,10 @@
       <p class="hint">${spec.tip || "If they are not within reach, cut the whole circle. High cost, high density."}</p>
       ${sel("Tentacle", opts, spec.id)}
       <label class="field"><span>Named location</span><input data-field="which" placeholder="e.g. Louvre" value="${escapeHtml(draft.which || "")}"></label>
-      <div class="actions">
-        <button class="btn btn-ghost" data-act="gps" type="button">Use my location</button>
-        <button class="btn btn-ghost" data-act="cancel" type="button">Cancel</button>
-        <button class="btn btn-rose" data-act="miss" type="button">Not in reach</button>
-        <button class="btn btn-amber" data-act="named" type="button">They named one</button>
-      </div>`);
+      ${askRow([
+        { act: "miss", label: "Not in reach", cls: "btn-rose" },
+        { act: "named", label: "They named one", cls: "btn-amber" },
+      ])}`);
     draft.tentacle = spec.id;
   }
 
@@ -776,11 +973,10 @@
       <h3>Send me a photo of ${spec ? spec.label.toLowerCase() : "…"}</h3></header>
       <p class="hint">${spec?.tip || "No Street View. Normal aspect ratio."}</p>
       ${sel("Photo", opts, spec?.id)}
-      <div class="actions">
-        <button class="btn btn-ghost" data-act="cancel">Cancel</button>
-        <button class="btn btn-rose" data-act="cannot">Cannot answer</button>
-        <button class="btn btn-amber" data-act="sent">Logged as sent</button>
-      </div>`);
+      ${askRow([
+        { act: "cannot", label: "Cannot answer", cls: "btn-rose" },
+        { act: "sent", label: "Logged as sent", cls: "btn-amber" },
+      ], { noGps: true })}`);
     draft.photo = spec?.id;
     if (!clicks.length) {
       /* photo doesn't need a map click */
@@ -935,6 +1131,8 @@
     toast,
     applyHere,
     remember,
+    applyRemoteAnswer,
+    waitingInspector,
     setOnRender(fn) { onNeedRender = fn; },
   };
 })(window);
