@@ -84,6 +84,9 @@
     if (bound) return;
     bound = true;
     $("hider").addEventListener("click", onClick);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && sheetMode && !$("hider").hidden) closeSheet();
+    });
     $("hider-pause").addEventListener("click", requestTimerVote);
     $("hider-leave").addEventListener("click", async () => {
       const ok = await JLTools.confirm("You can rejoin with the same code while the game is live.", {
@@ -109,6 +112,10 @@
   }
 
   function onClick(ev) {
+    if (ev.target && ev.target.id === "hider-sheet") {
+      closeSheet();
+      return;
+    }
     const btn = ev.target.closest("[data-h]");
     if (!btn) return;
     ev.preventDefault();

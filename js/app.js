@@ -215,6 +215,7 @@
       });
     });
     $("start-game").addEventListener("click", startFromSetup);
+    $("setup-cta-go").addEventListener("click", startFromSetup);
     $("start-custom").addEventListener("click", startCustom);
     $("setup-search").addEventListener("input", renderPresetGrid);
     $("resume-btn").addEventListener("click", async () => {
@@ -232,6 +233,11 @@
     const meta = JLQuestions.SIZES[s.size];
     $("size-blurb").textContent = `${meta.blurb} · hide ${meta.hideMinutes} min · zone ${JLQuestions.formatMiles(meta.zoneMiles, s.units)}`;
     $("resume-btn").hidden = !s.playable;
+    $("setup-cta-name").textContent = s.presetName || "Pick a map";
+    $("setup-cta-size").textContent = s.presetId
+      ? `${meta.label} game · ${s.units === "km" ? "kilometres" : "miles"}`
+      : "Choose a country or metro above";
+    $("setup-cta-go").disabled = !s.presetId;
   }
 
   function renderPresetGrid() {
@@ -282,6 +288,8 @@
     }
     $("start-game").disabled = true;
     $("start-game").textContent = "Loading map…";
+    $("setup-cta-go").disabled = true;
+    $("setup-cta-go").textContent = "Loading…";
     $("setup").classList.add("is-loading");
     try {
       let poly = await JLPresets.loadBoundary(preset);
@@ -301,6 +309,8 @@
     } finally {
       $("start-game").disabled = false;
       $("start-game").textContent = "Create game";
+      $("setup-cta-go").disabled = false;
+      $("setup-cta-go").textContent = "Create game";
       $("setup").classList.remove("is-loading");
     }
   }
@@ -457,6 +467,16 @@
         JLTools.toast(url);
       }
     });
+    if (navigator.share) $("invite-share").hidden = false;
+    $("invite-share").addEventListener("click", async () => {
+      try {
+        await navigator.share({
+          title: "LAG — Hide + Seek",
+          text: "Join our Hide + Seek game" + (JLNet.code ? " · code " + JLNet.code : ""),
+          url: JLNet.joinUrl(),
+        });
+      } catch { /* user cancelled the share sheet */ }
+    });
     $("invite").addEventListener("click", (e) => {
       if (e.target.id === "invite") $("invite").hidden = true;
     });
@@ -510,7 +530,7 @@
         renderStations();
         scheduleStationLoad();
       });
-      ["jl-inspector", "toggle-log", "drawer", "btn-locate", "invite", "seeker-banner"].forEach((id) => {
+      ["jl-inspector", "toggle-log", "drawer", "btn-locate", "invite", "seeker-banner", "layers-toggle", "more-menu"].forEach((id) => {
         const n = $(id);
         if (n && window.L) {
           L.DomEvent.disableClickPropagation(n);
@@ -609,6 +629,27 @@
       JLMap.setDark(e.target.checked);
     });
     $("toggle-stations").addEventListener("change", () => renderStations());
+    $("layers-toggle").addEventListener("click", () => {
+      $("layers").classList.toggle("is-open");
+    });
+    const moreBtn = $("btn-more");
+    const moreMenu = $("more-menu");
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      moreMenu.hidden = !moreMenu.hidden;
+    });
+    moreMenu.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-proxy]");
+      if (!b) return;
+      moreMenu.hidden = true;
+      const target = $(b.getAttribute("data-proxy"));
+      if (target) target.click();
+    });
+    document.addEventListener("click", (e) => {
+      if (!moreMenu.hidden && !moreMenu.contains(e.target) && !moreBtn.contains(e.target)) {
+        moreMenu.hidden = true;
+      }
+    });
     function closeDrawer() {
       const d = $("drawer");
       if (window.matchMedia("(max-width: 720px)").matches) d.classList.remove("is-open");
@@ -642,6 +683,7 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         if (!$("invite").hidden) { $("invite").hidden = true; return; }
+        if (!$("more-menu").hidden) { $("more-menu").hidden = true; return; }
         JLTools.cancel();
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
@@ -771,6 +813,14 @@
     $("hud-size").textContent = JLQuestions.SIZES[s.size].label;
     const pct = JLState.remainingPct();
     $("hud-pct").textContent = (Math.round(pct * 10) / 10) + "% left";
+    const bar = $("hud-progress");
+    if (bar && bar.firstElementChild) {
+      bar.firstElementChild.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    }
+    const moreHead = $("more-head");
+    if (moreHead) {
+      moreHead.textContent = `${s.presetName || "Map"} · ${JLQuestions.SIZES[s.size].label} · ${Math.round(pct * 10) / 10}% left`;
+    }
     const st = JLState.remainingStations();
     $("hud-stations").textContent = st.length ? st.length + " stations" : "— stations";
     $("toggle-rail").checked = s.layers.rail;

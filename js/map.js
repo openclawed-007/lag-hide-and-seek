@@ -173,36 +173,72 @@
   }
 
   function animateRemainingChange(prev, next) {
-    let diff = null;
-    let isCut = true;
+    let prevArea = 0;
+    let nextArea = 0;
     try {
-      const prevArea = turf.area(JLGeo.asFeature(prev));
-      const nextArea = turf.area(JLGeo.asFeature(next));
-      const eps = Math.max(prevArea, nextArea, 1) * 0.0005;
-      if (Math.abs(prevArea - nextArea) <= eps) return;
-      isCut = nextArea < prevArea;
-      diff = isCut ? JLGeo.safeDifference(prev, next) : JLGeo.safeDifference(next, prev);
+      prevArea = turf.area(JLGeo.asFeature(prev));
+      nextArea = turf.area(JLGeo.asFeature(next));
+    } catch { return; }
+    const eps = Math.max(prevArea, nextArea, 1) * 0.0005;
+    if (Math.abs(prevArea - nextArea) <= eps) return;
+    const shrank = nextArea < prevArea;
+
+    // "Keep inside": most of the map was eliminated. Celebrate what is LEFT and
+    // frame it, instead of flashing (and zooming out to) the huge removed region.
+    // Also skips the expensive polygon difference for this case.
+    if (shrank && nextArea < prevArea * 0.6) {
+      flashArea(next, "keep");
+      focusRemaining(next);
+      return;
+    }
+
+    let diff = null;
+    try {
+      diff = shrank ? JLGeo.safeDifference(prev, next) : JLGeo.safeDifference(next, prev);
     } catch { /* ignore */ }
     if (!diff) return;
-    flashArea(diff, isCut);
+    flashArea(diff, shrank ? "cut" : "restore");
     ensureVisible(diff);
   }
 
-  function flashArea(feature, isCut) {
+  const FLASH_STYLES = {
+    cut:     { color: "#ff8ba1", fillColor: "#ff5f7e", weight: 2, cls: "jl-flash jl-flash--cut" },
+    restore: { color: "#8be8d5", fillColor: "#3dbaa4", weight: 2, cls: "jl-flash jl-flash--restore" },
+    keep:    { color: "#ffd489", fillColor: "#e8b04a", weight: 3, cls: "jl-flash jl-flash--keep" },
+  };
+
+  function flashArea(feature, kind) {
     if (!flashLayer) return;
     clearGroup(flashLayer);
+    const st = FLASH_STYLES[kind] || FLASH_STYLES.cut;
     L.geoJSON(JLGeo.asFeature(feature), {
       style: {
-        color: isCut ? "#ff8ba1" : "#8be8d5",
-        weight: 2,
-        fillColor: isCut ? "#ff5f7e" : "#3dbaa4",
+        color: st.color,
+        weight: st.weight,
+        fillColor: st.fillColor,
         fillOpacity: 0.7,
         interactive: false,
-        className: isCut ? "jl-flash jl-flash--cut" : "jl-flash jl-flash--restore",
+        className: st.cls,
       },
     }).addTo(flashLayer);
     clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => clearGroup(flashLayer), 1400);
+    flashTimer = setTimeout(() => clearGroup(flashLayer), 1800);
+  }
+
+  function reducedMotion() {
+    return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  /* Frame the remaining area — zooms in or out to fit what is left in play */
+  function focusRemaining(feature) {
+    if (!map || !feature) return;
+    try {
+      const b = turf.bbox(JLGeo.asFeature(feature));
+      if (!isFinite(b[0]) || !isFinite(b[3])) return;
+      const target = L.latLngBounds([b[1], b[0]], [b[3], b[2]]);
+      if (reducedMotion()) map.fitBounds(target, { padding: [70, 70], maxZoom: 14, animate: false });
+      else map.flyToBounds(target, { padding: [70, 70], maxZoom: 14, duration: 1.0 });
+    } catch { /* ignore */ }
   }
 
   /* Zoom out (never in) just enough to keep a gameplay feature in view */
@@ -218,8 +254,7 @@
       if (view.pad(-0.04).contains(target)) return;
       const merged = view.extend(target);
       const o = Object.assign({ padding: [60, 60], maxZoom: map.getZoom(), duration: 0.9 }, opts || {});
-      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if (reduce) map.fitBounds(merged, { padding: o.padding, maxZoom: o.maxZoom, animate: false });
+      if (reducedMotion()) map.fitBounds(merged, { padding: o.padding, maxZoom: o.maxZoom, animate: false });
       else map.flyToBounds(merged, o);
     } catch { /* ignore */ }
   }
@@ -353,6 +388,7 @@
     paintMasks,
     fitPlayable,
     ensureVisible,
+    focusRemaining,
     clearPreview,
     showPreview,
     showPreviewMulti,

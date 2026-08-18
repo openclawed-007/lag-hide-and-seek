@@ -144,6 +144,13 @@ input:focus, select:focus { outline: none; }
 }
 .join__inner { max-width: 440px; }
 
+/* Staggered entrance on the home screen */
+.start .brand { animation: jl-up .5s ease backwards; }
+.start .role-grid { animation: jl-up .5s .08s ease backwards; }
+.start .start-resume { animation: jl-up .5s .14s ease backwards; }
+.start .legal { animation: jl-up .5s .2s ease backwards; }
+@keyframes jl-up { from { opacity: 0; transform: translateY(12px); } }
+
 .brand { display: flex; flex-direction: column; gap: 6px; margin-bottom: 36px; }
 .brand--compact { margin-bottom: 24px; }
 .brand h1 {
@@ -163,6 +170,7 @@ input:focus, select:focus { outline: none; }
   gap: 14px;
 }
 .role-card {
+  position: relative;
   text-align: left;
   background: rgba(255,255,255,0.03);
   border: 1px solid var(--line-2);
@@ -174,6 +182,17 @@ input:focus, select:focus { outline: none; }
   min-height: 180px;
   transition: border-color .15s, transform .15s, background .15s;
 }
+.role-card::after {
+  content: "→";
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  font-size: 18px;
+  color: var(--muted);
+  transition: transform .15s, color .15s;
+}
+.role-card--seek:hover::after { color: var(--amber); transform: translateX(4px); }
+.role-card--hide:hover::after { color: var(--teal); transform: translateX(4px); }
 .role-card:hover { transform: translateY(-2px); }
 .role-card:active { transform: translateY(0) scale(0.99); }
 .role-card--seek:hover { border-color: rgba(232,176,74,.5); background: rgba(232,176,74,.06); }
@@ -189,6 +208,7 @@ input:focus, select:focus { outline: none; }
 .preset-head { margin: 22px 0 10px; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
 .preset-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 .preset-card {
+  position: relative;
   text-align: left;
   background: rgba(255,255,255,0.03);
   border: 1px solid var(--line-2);
@@ -198,6 +218,14 @@ input:focus, select:focus { outline: none; }
   flex-direction: column;
   gap: 4px;
   transition: border-color .15s, transform .15s, background .15s;
+}
+.preset-card.is-on::after {
+  content: "✓";
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  color: var(--amber);
+  font-weight: 700;
 }
 .preset-card:hover { border-color: rgba(232,176,74,.45); transform: translateY(-1px); }
 .preset-card:active { transform: translateY(0); }
@@ -268,6 +296,34 @@ input:focus, select:focus { outline: none; }
 .checks label:hover { color: var(--text); }
 .setup-actions { display: flex; flex-direction: column; gap: 8px; }
 
+/* Sticky create-game bar (mobile setup) */
+.setup-cta { display: none; }
+.setup-cta__meta { display: flex; flex-direction: column; min-width: 0; }
+.setup-cta__meta b { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.setup-cta__meta span { font-size: 11px; color: var(--muted); }
+@media (max-width: 860px) {
+  .setup-cta {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--panel-solid);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 10px 12px 10px 16px;
+    box-shadow: var(--shadow);
+    animation: jl-up .3s ease;
+  }
+  .setup-cta .btn { flex-shrink: 0; }
+  .setup__inner { padding-bottom: 150px; }
+  #start-game { display: none; } /* the sticky bar is the CTA on mobile */
+}
+
 .code-input {
   font-family: var(--mono);
   font-size: 28px;
@@ -286,7 +342,43 @@ input:focus, select:focus { outline: none; }
 }
 
 /* ——— Play ——— */
-.play { height: 100%; display: grid; grid-template-rows: 56px 1fr; overflow: hidden; }
+.play { position: relative; height: 100%; display: grid; grid-template-rows: 56px 1fr; overflow: hidden; }
+.mobile-only { display: none !important; }
+
+.more-menu {
+  position: absolute;
+  top: 62px;
+  right: 10px;
+  z-index: 600;
+  min-width: 190px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: jl-pop .15s ease;
+}
+.more-menu__head {
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-2);
+}
+.more-menu button {
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--line-2);
+  text-align: left;
+  padding: 13px 16px;
+  font-size: 14px;
+  color: var(--text);
+  transition: background .15s;
+}
+.more-menu button:last-child { border-bottom: 0; }
+.more-menu button:hover, .more-menu button:active { background: rgba(255,255,255,0.06); }
 .play-stage { position: relative; min-height: 0; height: 100%; }
 #map { position: absolute; inset: 0; background: #0b1220; }
 .leaflet-container { background: #0b1220; font-family: var(--font); }
@@ -297,6 +389,7 @@ input:focus, select:focus { outline: none; }
 .leaflet-bar a:hover { background: #1c2740 !important; }
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -305,6 +398,23 @@ input:focus, select:focus { outline: none; }
   border-bottom: 1px solid var(--line-2);
   z-index: 500;
   min-width: 0;
+}
+/* Thin "map remaining" bar along the bottom edge of the top bar */
+.hud-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: rgba(255,255,255,0.06);
+  pointer-events: none;
+}
+.hud-progress span {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, var(--teal), var(--amber));
+  transition: width .6s ease;
 }
 .word { flex-shrink: 0; white-space: nowrap; }
 .hud {
@@ -502,6 +612,7 @@ input:focus, select:focus { outline: none; }
 .station-row:last-child { border-bottom: 0; }
 .station-row span { font-size: 11px; color: var(--muted); }
 .fab-log { position: absolute; top: 18px; right: 14px; z-index: 430; }
+.fab-layers { display: none; }
 
 .seeker-banner {
   position: absolute;
@@ -642,6 +753,14 @@ input:focus, select:focus { outline: none; }
   0%   { fill-opacity: 0.7;  stroke-opacity: 1; }
   30%  { fill-opacity: 0.42; stroke-opacity: 0.9; }
   55%  { fill-opacity: 0.6;  stroke-opacity: 0.7; }
+  100% { fill-opacity: 0;    stroke-opacity: 0; }
+}
+/* "Keep inside": glow the surviving area with a soft amber pulse + lingering outline */
+.jl-flash--keep { animation: jl-flash-keep 1.7s ease-out forwards; }
+@keyframes jl-flash-keep {
+  0%   { fill-opacity: 0.30; stroke-opacity: 1; }
+  35%  { fill-opacity: 0.12; stroke-opacity: 0.95; }
+  60%  { fill-opacity: 0.20; stroke-opacity: 0.85; }
   100% { fill-opacity: 0;    stroke-opacity: 0; }
 }
 .jl-preview { animation: jl-preview-in .3s ease; }
@@ -823,12 +942,31 @@ input:focus, select:focus { outline: none; }
   .actions { flex-direction: column; }
   .actions .btn { width: 100%; }
   .layers { display: none; }
+  .fab-layers {
+    display: inline-flex;
+    position: absolute;
+    left: 8px;
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    z-index: 430;
+    background: rgba(11,18,32,0.94);
+  }
+  .layers.is-open {
+    display: flex;
+    left: 8px;
+    right: auto;
+    bottom: calc(128px + env(safe-area-inset-bottom));
+    z-index: 435;
+    animation: jl-pop .18s ease;
+  }
   .drawer {
     left: 8px; right: 8px; width: auto;
     top: auto; bottom: calc(92px + env(safe-area-inset-bottom)); max-height: 50vh;
   }
   .hud { display: none; }
   .desktop-only { display: none !important; }
+  .mobile-only { display: inline-flex !important; }
+  /* These live in the ⋯ menu on mobile */
+  #btn-locate, #btn-new { display: none; }
   .topbar { overflow-x: auto; scrollbar-width: none; }
   .topbar::-webkit-scrollbar { display: none; }
   .topbar__right { flex-shrink: 0; }

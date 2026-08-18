@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
-  <link rel="stylesheet" href="css/styles.css?v=15" />
+  <link rel="stylesheet" href="css/styles.css?v=17" />
 </head>
 <body>
   <section id="start" class="start">
@@ -79,6 +79,13 @@
             <button id="resume-btn" class="btn btn-ghost" type="button" hidden>Resume last map</button>
           </div>
         </aside>
+      </div>
+      <div id="setup-cta" class="setup-cta">
+        <div class="setup-cta__meta">
+          <b id="setup-cta-name">Pick a map</b>
+          <span id="setup-cta-size"></span>
+        </div>
+        <button id="setup-cta-go" class="btn btn-amber" type="button">Create game</button>
       </div>
     </div>
   </section>
@@ -162,6 +169,7 @@
 
   <section id="play" class="play" hidden>
     <header class="topbar">
+      <div id="hud-progress" class="hud-progress" aria-hidden="true"><span></span></div>
       <div class="word">LAG<span>.</span></div>
       <div class="hud">
         <b id="hud-region">Map</b>
@@ -183,8 +191,16 @@
         <button id="btn-reset" class="btn btn-ghost desktop-only" type="button">Reset cuts</button>
         <button id="btn-export" class="btn btn-ghost desktop-only" type="button">Export</button>
         <button id="btn-new" class="btn btn-ghost" type="button">Home</button>
+        <button id="btn-more" class="btn btn-ghost mobile-only" type="button" aria-label="More options">⋯</button>
       </div>
     </header>
+    <div id="more-menu" class="more-menu" hidden>
+      <div id="more-head" class="more-menu__head"></div>
+      <button type="button" data-proxy="btn-locate">📍 My pin</button>
+      <button type="button" data-proxy="btn-reset">↺ Reset cuts</button>
+      <button type="button" data-proxy="btn-export">⇩ Export game</button>
+      <button type="button" data-proxy="btn-new">⌂ Home</button>
+    </div>
 
     <div class="play-stage">
       <div id="map"></div>
@@ -203,7 +219,8 @@
 
       <aside id="jl-inspector" class="inspector" hidden></aside>
 
-      <div class="layers">
+      <button id="layers-toggle" class="btn btn-ghost fab-layers" type="button">Layers</button>
+      <div id="layers" class="layers">
         <label><input id="toggle-dark" type="checkbox" checked /> Dark map</label>
         <label><input id="toggle-rail" type="checkbox" checked /> Rail overlay</label>
         <label><input id="toggle-stations" type="checkbox" /> Stations</label>
@@ -238,6 +255,7 @@
       <p id="invite-url" class="invite-url"></p>
       <div class="actions">
         <button type="button" id="invite-copy" class="btn btn-amber">Copy join link</button>
+        <button type="button" id="invite-share" class="btn btn-ghost" hidden>Share…</button>
         <button type="button" id="invite-close" class="btn btn-ghost">Done</button>
       </div>
     </div>
@@ -254,14 +272,14 @@
   <script src="js/geo.js?v=10"></script>
   <script src="js/state.js?v=11"></script>
   <script src="js/overpass.js?v=10"></script>
-  <script src="js/map.js?v=11"></script>
+  <script src="js/map.js?v=12"></script>
   <script src="js/tools.js?v=12"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="js/firebase-config.js?v=1"></script>
   <script src="js/net.js?v=15"></script>
   <script src="js/qr.js?v=10"></script>
-  <script src="js/hider.js?v=14"></script>
-  <script src="js/app.js?v=12"></script>
+  <script src="js/hider.js?v=15"></script>
+  <script src="js/app.js?v=14"></script>
 </body>
 </html>
