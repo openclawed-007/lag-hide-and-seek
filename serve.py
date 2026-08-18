@@ -152,8 +152,16 @@ def public_room(room):
 
 def persist():
     slim = []
+    t_ms = int(now() * 1000)
     for room in ROOMS.values():
+        if room.get("ended"):
+            continue
         copy = {k: v for k, v in room.items() if k != "event"}
+        ans = copy.get("lastAnswer")
+        if isinstance(ans, dict) and ans.get("photo") and t_ms - int(ans.get("at") or 0) > 15 * 60 * 1000:
+            ans = dict(ans)
+            ans["photo"] = None
+            copy["lastAnswer"] = ans
         slim.append(copy)
     try:
         ROOM_FILE.write_text(json.dumps(slim), encoding="utf-8")
@@ -177,9 +185,40 @@ def load_rooms():
         ROOMS[raw["code"]] = raw
 
 
+def present_players(room):
+    t = now()
+    living = []
+    for p in room.get("players") or []:
+        if p.get("left") or p.get("departed"):
+            continue
+        if t - (p.get("seen") or 0) >= 300:
+            continue
+        living.append(p)
+    return living
+
+
+def should_wipe(room):
+    if not room:
+        return True
+    if room.get("ended"):
+        return True
+    if not (room.get("players") or []):
+        return True
+    return False
+
+
+def should_wipe_on_leave(room):
+    if should_wipe(room):
+        return True
+    return len(present_players(room)) == 0
+
+
 def prune():
     t = now()
-    dead = [c for c, r in ROOMS.items() if t - r.get("touched", 0) > ROOM_TTL]
+    dead = [
+        c for c, r in ROOMS.items()
+        if r.get("ended") or t - r.get("touched", 0) > ROOM_TTL or not (r.get("players") or [])
+    ]
     for c in dead:
         ROOMS.pop(c, None)
 
@@ -414,10 +453,49 @@ def apply_event(room, player, etype, payload):
         append_log(room, {"kind": "curse", "title": curse["name"], "detail": curse["effect"]})
         return
 
+    if etype == "curse.proof":
+        if player.get("role") != "seeker":
+            raise ValueError("Only seekers can send curse proof.")
+        cid = payload.get("id")
+        curse = next((c for c in (room.get("activeCurses") or []) if c.get("id") == cid), None)
+        if not curse:
+            raise ValueError("That curse is not active.")
+        if not payload.get("photo"):
+            raise ValueError("Send a photo proving you completed the curse.")
+        curse["proof"] = {
+            "photo": payload.get("photo"),
+            "note": payload.get("note") or "",
+            "at": int(now() * 1000),
+        }
+        append_log(room, {"kind": "curse", "title": curse.get("name") or "Curse", "detail": "Seekers sent proof"})
+        return
+
+    if etype == "curse.reject":
+        if player.get("role") != "hider":
+            raise ValueError("Only the hider can reject curse proof.")
+        cid = payload.get("id")
+        curse = next((c for c in (room.get("activeCurses") or []) if c.get("id") == cid), None)
+        if not curse:
+            raise ValueError("That curse is not active.")
+        curse["proof"] = None
+        append_log(room, {"kind": "curse", "title": curse.get("name") or payload.get("name") or "Curse", "detail": "Proof rejected"})
+        return
+
     if etype == "curse.clear":
+        if player.get("role") != "hider":
+            raise ValueError("Only the hider can confirm a curse is cleared.")
         cid = payload.get("id")
         room["activeCurses"] = [c for c in (room.get("activeCurses") or []) if c.get("id") != cid]
         append_log(room, {"kind": "curse", "title": payload.get("name") or "Curse", "detail": "Cleared"})
+        return
+
+    if etype == "leave":
+        if payload.get("soft"):
+            player["departed"] = True
+        else:
+            room["players"] = [p for p in room["players"] if p.get("token") != player.get("token")]
+        if should_wipe_on_leave(room):
+            room["ended"] = True
         return
 
     if etype == "powerup.play":
@@ -511,6 +589,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def handle_api(self, method, parsed):
         parts = [p for p in parsed.path.split("/") if p]
+        if parts[:2] == ["api", "rooms"]:
+            with LOCK:
+                prune()
         try:
             if method == "GET" and parts == ["api", "health"]:
                 self.send_json(200, {
@@ -588,6 +669,11 @@ class Handler(SimpleHTTPRequestHandler):
                             apply_event(room, player, etype, payload)
                         except ValueError as err:
                             self.send_json(400, {"error": str(err)})
+                            return
+                        if room.get("ended"):
+                            ROOMS.pop(code, None)
+                            persist()
+                            self.send_json(200, {"room": {"code": code, "ended": True}})
                             return
                         if etype != "ping":
                             touch(room)

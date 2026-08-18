@@ -13,6 +13,10 @@
   let myLoc = null;
   let firestore = null;
   let unsubscribeFirestore = null;
+  let endedCode = null;
+  const PHOTO_TTL_MS = 15 * 60 * 1000;
+  const STALE_PLAYER_MS = 5 * 60 * 1000;
+  const ROOM_TTL_MS = 48 * 60 * 60 * 1000;
   const channelName = () => "lag-room-" + code;
   let channel = null;
 
@@ -49,6 +53,10 @@
   function friendlyFirebaseError(err, fallback) {
     const msg = String((err && err.message) || err || "");
     if (/permission|insufficient/i.test(msg)) return new Error(fallback || "No game with that code, or it has expired.");
+    if (/failed-precondition/i.test(msg)) return new Error("The game was updated twice at once. Try that again.");
+    if (/blocked|ERR_BLOCKED|Failed to fetch|NetworkError|offline/i.test(msg)) {
+      return new Error("Firestore was blocked. Turn off the ad blocker for this site and reload.");
+    }
     return err instanceof Error ? err : new Error(msg || fallback || "Request failed");
   }
 
@@ -65,7 +73,131 @@
   }
 
   function snapshot() {
-    return { mode, code, token, role, room, linked: hasHider(), online: !!(room && (role === "hider" ? room.seekerOnline : room.hiderOnline)) };
+    return {
+      mode,
+      code,
+      token,
+      role,
+      room,
+      linked: hasHider(),
+      online: !!(room && (role === "hider" ? room.seekerOnline : room.hiderOnline)),
+      endedCode,
+    };
+  }
+
+  function forgetSession() {
+    try {
+      localStorage.removeItem("lag-net");
+      sessionStorage.removeItem("lag-net");
+      sessionStorage.removeItem("lag-last-answer");
+    } catch { /* ignore */ }
+  }
+
+  function purgeLocalRoom(c) {
+    if (!c) return;
+    try {
+      localStorage.removeItem(localKey(c));
+      localStorage.removeItem("lag-hider-table-v1:" + c);
+    } catch { /* ignore */ }
+  }
+
+  function pruneLocalJunk() {
+    try {
+      const now = Date.now();
+      const drop = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key) continue;
+        if (key.startsWith("lag-room-live-")) {
+          try {
+            const data = JSON.parse(localStorage.getItem(key) || "null");
+            if (!data || data.ended || now - (data.touched || data.created || 0) > ROOM_TTL_MS) drop.push(key);
+          } catch {
+            drop.push(key);
+          }
+        } else if (key.startsWith("lag-hider-table-v1:") && key !== "lag-hider-table-v1:" + (code || "")) {
+          const roomKey = "lag-room-live-" + key.slice("lag-hider-table-v1:".length);
+          if (!localStorage.getItem(roomKey) && key.slice("lag-hider-table-v1:".length) !== (code || "")) {
+            drop.push(key);
+          }
+        }
+      }
+      drop.forEach((key) => localStorage.removeItem(key));
+    } catch { /* ignore */ }
+  }
+
+  function presentPlayers(store) {
+    const now = Date.now();
+    return (store.players || []).filter((p) => {
+      if (!p || p.left) return false;
+      if (p.departed) return false;
+      return now - (p.seen || 0) < STALE_PLAYER_MS;
+    });
+  }
+
+  function shouldWipeStore(store) {
+    if (!store) return true;
+    if (store.ended) return true;
+    if ((store.expiresAt || 0) > 0 && store.expiresAt <= Date.now()) return true;
+    if (store.players) return presentPlayers(store).length === 0;
+    const tokens = store._tokens ? Object.keys(store._tokens) : [];
+    return tokens.length === 0;
+  }
+
+  function stripHeavyFields(store) {
+    const ans = store.lastAnswer;
+    if (ans && ans.photo && (ans.at || 0) && Date.now() - ans.at > PHOTO_TTL_MS) {
+      store.lastAnswer = Object.assign({}, ans, { photo: null });
+    }
+    return store;
+  }
+
+  function applyLeaveToStore(store, playerToken, playerRole, payload) {
+    const soft = !!(payload && payload.soft);
+    if (store.players) {
+      if (soft) {
+        store.players = store.players.map((p) => (
+          p.token === playerToken ? Object.assign({}, p, { departed: true, seen: Date.now() }) : p
+        ));
+      } else {
+        store.players = store.players.filter((p) => p.token !== playerToken);
+      }
+    }
+    if (store._tokens && playerToken && !soft) delete store._tokens[playerToken];
+    if (!store.players && !soft) {
+      if (playerRole === "hider") store.hiderOnline = false;
+      else store.seekerOnline = false;
+    }
+    store.touched = Date.now();
+    store.seq = (store.seq || 0) + 1;
+    if (shouldWipeStore(store)) {
+      store.ended = true;
+      store.phase = "ended";
+      store.players = [];
+      store.pendingQuestion = null;
+      store.lastAnswer = null;
+      store.activeCurses = [];
+      store.seekerLocs = [];
+      store.log = [];
+      store.hiders = 0;
+      store.seekers = 0;
+      store.seekerOnline = false;
+      store.hiderOnline = false;
+    }
+    return store;
+  }
+
+  function finishRemoteEnd(gone) {
+    stop();
+    forgetSession();
+    purgeLocalRoom(gone);
+    code = null;
+    token = null;
+    role = null;
+    room = null;
+    mode = "none";
+    endedCode = gone;
+    emit();
   }
 
   function onChange(fn) {
@@ -167,8 +299,8 @@
 
   function applyLocal(store, etype, payload, playerRole) {
     payload = payload || {};
-    const seekerOnly = new Set(["question.ask", "question.cancel", "meta", "timer"]);
-    const hiderOnly = new Set(["question.answer", "question.veto", "question.randomize", "curse.play", "powerup.play", "cards.sync", "spotty"]);
+    const seekerOnly = new Set(["question.ask", "question.cancel", "meta", "timer", "curse.proof"]);
+    const hiderOnly = new Set(["question.answer", "question.veto", "question.randomize", "curse.play", "curse.clear", "curse.reject", "powerup.play", "cards.sync", "spotty"]);
     if (seekerOnly.has(etype) && playerRole !== "seeker") throw new Error("Only seekers can do that.");
     if (hiderOnly.has(etype) && playerRole !== "hider") throw new Error("Only the hider can do that.");
     if (etype === "question.ask") {
@@ -217,9 +349,23 @@
       if (payload.disabledCategory) store.disabledCategory = payload.disabledCategory;
       if (payload.bannedQuestions) store.bannedQuestions = payload.bannedQuestions;
       store.log = (store.log || []).concat([{ kind: "curse", title: curse.name, detail: curse.effect, at: Date.now() }]).slice(-40);
+    } else if (etype === "curse.proof") {
+      const curse = (store.activeCurses || []).find((c) => c.id === payload.id);
+      if (!curse) throw new Error("That curse is not active.");
+      if (!payload.photo) throw new Error("Send a photo proving you completed the curse.");
+      curse.proof = { photo: payload.photo, note: payload.note || "", at: Date.now() };
+      store.log = (store.log || []).concat([{ kind: "curse", title: curse.name, detail: "Seekers sent proof", at: Date.now() }]).slice(-40);
+    } else if (etype === "curse.reject") {
+      const curse = (store.activeCurses || []).find((c) => c.id === payload.id);
+      if (!curse) throw new Error("That curse is not active.");
+      curse.proof = null;
+      store.log = (store.log || []).concat([{ kind: "curse", title: curse.name || payload.name || "Curse", detail: "Proof rejected", at: Date.now() }]).slice(-40);
     } else if (etype === "curse.clear") {
       store.activeCurses = (store.activeCurses || []).filter((c) => c.id !== payload.id);
       store.log = (store.log || []).concat([{ kind: "curse", title: payload.name || "Curse", detail: "Cleared", at: Date.now() }]).slice(-40);
+    } else if (etype === "leave") {
+      applyLeaveToStore(store, payload.token, playerRole, payload);
+      return store;
     } else if (etype === "powerup.play") {
       store.log = (store.log || []).concat([{ kind: "powerup", title: payload.name || "Powerup", detail: payload.detail || "Played", at: Date.now() }]).slice(-40);
       if (payload.maxHand) store.maxHand = payload.maxHand;
@@ -296,7 +442,10 @@
   }
 
   async function create(meta) {
-    stop();
+    if (code && token) await leave();
+    else stop();
+    endedCode = null;
+    pruneLocalJunk();
     if (initFirebase()) {
       mode = "firebase";
       role = "seeker";
@@ -346,8 +495,10 @@
   }
 
   async function join(joinCode, joinRole) {
-    stop();
     joinCode = String(joinCode || "").trim().toUpperCase();
+    if (code && token && code !== joinCode) await leave();
+    else stop();
+    endedCode = null;
     joinRole = joinRole || "hider";
     if (!/^[A-Z0-9]{4,8}$/.test(joinCode)) throw new Error("Enter the 6-character game code.");
     if (initFirebase()) {
@@ -359,8 +510,9 @@
       try {
         await firestore.runTransaction(async (tx) => {
           const snap = await tx.get(ref);
-          if (!snap.exists || (snap.data().expiresAt || 0) <= Date.now()) throw new Error("No game with that code.");
+          if (!snap.exists || snap.data().ended || (snap.data().expiresAt || 0) <= Date.now()) throw new Error("No game with that code.");
           const store = snap.data();
+          if (shouldWipeStore(store)) throw new Error("That game has ended.");
           store.players = (store.players || []).concat([{ role, token, seen: Date.now() }]).slice(-12);
           store.seq = (store.seq || 0) + 1;
           store.touched = Date.now();
@@ -382,7 +534,10 @@
       room = data.room;
     } else {
       const store = readLocal(joinCode);
-      if (!store) throw new Error("No game with that code on this device. Use the same Wi-Fi server (serve.py) so phones can link.");
+      if (!store || store.ended || shouldWipeStore(store)) {
+        purgeLocalRoom(joinCode);
+        throw new Error("No game with that code on this device. Use the same Wi-Fi server (serve.py) so phones can link.");
+      }
       mode = "local";
       code = joinCode;
       token = (joinRole === "hider" ? "h-" : "s-") + Math.random().toString(36).slice(2);
@@ -419,17 +574,46 @@
       if (mode === "firebase") {
         if (!initFirebase()) return false;
         const snap = await roomRef(code).get();
-        if (!snap.exists || (snap.data().expiresAt || 0) <= Date.now()) return false;
+        if (!snap.exists || snap.data().ended || (snap.data().expiresAt || 0) <= Date.now()) {
+          forgetSession();
+          purgeLocalRoom(code);
+          return false;
+        }
         const store = snap.data();
-        if (!(store.players || []).some((p) => p.token === token && p.role === role)) return false;
+        const player = (store.players || []).find((p) => p.token === token && p.role === role);
+        if (!player) {
+          forgetSession();
+          return false;
+        }
+        if (shouldWipeStore(store) && player.departed) {
+          try { await roomRef(code).delete(); } catch { /* ignore */ }
+          forgetSession();
+          purgeLocalRoom(code);
+          return false;
+        }
+        if (player.departed) {
+          player.departed = false;
+          player.seen = Date.now();
+          store.touched = Date.now();
+          try { await roomRef(code).set(store); } catch { /* ignore */ }
+        }
         room = publicFirebaseRoom(store);
       } else if (mode === "api") {
         if (!(await health())) return false;
         const data2 = await api("/api/rooms/" + code);
+        if (!data2.room || data2.room.ended) {
+          forgetSession();
+          purgeLocalRoom(code);
+          return false;
+        }
         room = data2.room;
       } else {
         room = readLocal(code);
-        if (!room) return false;
+        if (!room || room.ended || shouldWipeStore(room)) {
+          forgetSession();
+          purgeLocalRoom(code);
+          return false;
+        }
       }
       startLoop();
       emit();
@@ -446,49 +630,75 @@
     } catch { /* ignore */ }
   }
 
+  let writeChain = Promise.resolve();
+
+  async function sendFirebase(type, payload) {
+    const ref = roomRef(code);
+    try {
+      await firestore.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) throw new Error("Room lost.");
+        const store = snap.data();
+        const player = (store.players || []).find((p) => p.token === token && p.role === role);
+        if (!player) throw new Error("This device is not in that game.");
+        if (store.ended) throw new Error("That game has ended.");
+        player.seen = Date.now();
+        if (player.departed && type !== "leave") player.departed = false;
+        if (type === "ping") stripHeavyFields(store);
+        if (type === "ping" && payload && payload.loc && role === "seeker") {
+          player.loc = {
+            lat: +payload.loc.lat,
+            lng: +payload.loc.lng,
+            acc: payload.loc.acc != null ? Math.round(payload.loc.acc) : null,
+          };
+          player.locAt = Date.now();
+        }
+        const body = Object.assign({}, payload || {});
+        if (type === "leave") body.token = token;
+        applyLocal(store, type, body, role);
+        store.touched = Date.now();
+        tx.set(ref, store);
+        if (store.ended) room = null;
+        else room = publicFirebaseRoom(store);
+      });
+    } catch (err) {
+      throw friendlyFirebaseError(err, "Could not update the game. Try joining again.");
+    }
+    if (type === "leave" && !room) {
+      try { await ref.delete(); } catch (err) { console.warn(err); }
+    }
+    emit();
+    return room;
+  }
+
   async function send(type, payload) {
     if (!code || !token) throw new Error("Not in a game.");
     if (mode === "firebase") {
-      const ref = roomRef(code);
-      try {
-        await firestore.runTransaction(async (tx) => {
-          const snap = await tx.get(ref);
-          if (!snap.exists) throw new Error("Room lost.");
-          const store = snap.data();
-          const player = (store.players || []).find((p) => p.token === token && p.role === role);
-          if (!player) throw new Error("This device is not in that game.");
-          player.seen = Date.now();
-          if (type === "ping" && payload && payload.loc && role === "seeker") {
-            player.loc = {
-              lat: +payload.loc.lat,
-              lng: +payload.loc.lng,
-              acc: payload.loc.acc != null ? Math.round(payload.loc.acc) : null,
-            };
-            player.locAt = Date.now();
-          }
-          applyLocal(store, type, payload || {}, role);
-          store.touched = Date.now();
-          tx.set(ref, store);
-          room = publicFirebaseRoom(store);
-        });
-      } catch (err) {
-        throw friendlyFirebaseError(err, "Could not update the game. Try joining again.");
-      }
-      emit();
-      return room;
+      const run = () => sendFirebase(type, payload);
+      const next = writeChain.then(run, run);
+      writeChain = next.then(() => {}, () => {});
+      return next;
     }
     if (mode === "api") {
       const data = await api("/api/rooms/" + code, {
         method: "POST",
         body: JSON.stringify({ token, type, payload: payload || {} }),
       });
-      room = data.room;
+      room = data.room && data.room.ended ? null : data.room;
       emit();
       return room;
     }
     const store = readLocal(code);
-    if (!store) throw new Error("Room lost.");
-    applyLocal(store, type, payload || {}, role);
+    if (!store || store.ended) throw new Error("Room lost.");
+    const body = Object.assign({}, payload || {});
+    if (type === "leave") body.token = token;
+    applyLocal(store, type, body, role);
+    if (store.ended) {
+      purgeLocalRoom(code);
+      room = null;
+      emit();
+      return null;
+    }
     writeLocal(store);
     room = store;
     emit();
@@ -512,7 +722,11 @@
     lastSince = 0;
     if (mode === "firebase") {
       unsubscribeFirestore = roomRef(code).onSnapshot((snap) => {
-        if (!snap.exists) return;
+        if (!snap.exists || (snap.data() && snap.data().ended)) {
+          if (stopped) return;
+          finishRemoteEnd(code);
+          return;
+        }
         room = publicFirebaseRoom(snap.data());
         emit();
       }, (err) => console.warn(err));
@@ -546,6 +760,7 @@
 
   function stop() {
     stopped = true;
+    writeChain = Promise.resolve();
     if (timer) clearTimeout(timer);
     timer = null;
     if (unsubscribeFirestore) {
@@ -558,18 +773,35 @@
     }
   }
 
-  function leave() {
+  async function leave(opts) {
+    const soft = !!(opts && opts.soft);
+    const prevCode = code;
+    let wiped = false;
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (prevCode && token) {
+      try {
+        await send("leave", { soft });
+        wiped = !room || !!(room && room.ended);
+      } catch (err) {
+        console.warn(err);
+      }
+    }
+    if (soft) return { wiped: false };
     stop();
+    if (wiped) purgeLocalRoom(prevCode);
+    forgetSession();
+    pruneLocalJunk();
     code = null;
     token = null;
     role = null;
     room = null;
     mode = "none";
-    try {
-      localStorage.removeItem("lag-net");
-      sessionStorage.removeItem("lag-net");
-    } catch { /* ignore */ }
     emit();
+    return { wiped };
   }
 
   function cryptoToken() {

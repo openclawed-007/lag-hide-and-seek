@@ -185,13 +185,14 @@
     });
     $("hider-pause").addEventListener("click", requestTimerVote);
     $("hider-leave").addEventListener("click", async () => {
-      const ok = await JLTools.confirm("You can rejoin with the same code while the game is live.", {
+      const ok = await JLTools.confirm("If the seekers have also left, this game is deleted and the code will not work again.", {
         title: "Leave this game?",
         confirmLabel: "Leave",
         danger: true,
       });
       if (!ok) return;
-      JLNet.leave();
+      await JLNet.leave();
+      reset();
       location.href = location.pathname;
     });
     $("hider-roll").addEventListener("click", () => {
@@ -232,6 +233,8 @@
     if (act === "play-power") confirmPower();
     if (act === "discard-only") discardSelected();
     if (act === "clear-curse") clearCurse(btn.getAttribute("data-id"), btn.getAttribute("data-name"));
+    if (act === "reject-proof") rejectProof(btn.getAttribute("data-id"), btn.getAttribute("data-name"));
+    if (act === "view-proof") viewProof(btn.getAttribute("data-id"));
     if (act === "bonus") awardBonus(Number(btn.getAttribute("data-min")) || 0, btn.getAttribute("data-why") || "Curse bonus");
   }
 
@@ -529,12 +532,53 @@
   }
 
   async function clearCurse(id, name) {
+    const curse = ((JLNet.room && JLNet.room.activeCurses) || []).find((c) => c.id === id);
+    const hasProof = !!(curse && curse.proof && curse.proof.photo);
+    const ok = await JLTools.confirm(
+      hasProof
+        ? "Confirm the seekers completed this curse? It will come off the board."
+        : "They have not sent photo proof. Only confirm if you saw them complete it.",
+      {
+        title: hasProof ? "Clear this curse?" : "Clear without proof?",
+        confirmLabel: "They cleared it",
+        danger: !hasProof,
+      }
+    );
+    if (!ok) return;
     try {
       await JLNet.send("curse.clear", { id, name });
       render();
     } catch (err) {
       toast(err.message);
     }
+  }
+
+  async function rejectProof(id, name) {
+    try {
+      await JLNet.send("curse.reject", { id, name });
+      toast("Rejected — they need to send new proof.");
+      render();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  function viewProof(id) {
+    const curse = ((JLNet.room && JLNet.room.activeCurses) || []).find((c) => c.id === id);
+    if (curse && curse.proof && window.JLTools) {
+      JLTools.showPhoto({
+        title: curse.name + " — seeker proof",
+        photo: curse.proof.photo,
+        note: curse.proof.note || "",
+      });
+    }
+  }
+
+  function reset() {
+    table = null;
+    pendingDraw = null;
+    sheetMode = null;
+    lastAnswerId = null;
   }
 
   async function awardBonus(min, why) {
@@ -645,44 +689,12 @@
   let photoDraft = null;
   let photoDraftQ = null;
 
-  function compressImage(file) {
-    return new Promise((resolve, reject) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        URL.revokeObjectURL(url);
-        try {
-          const draw = (maxSide, quality) => {
-            const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-            const cv = document.createElement("canvas");
-            cv.width = Math.max(1, Math.round(img.width * scale));
-            cv.height = Math.max(1, Math.round(img.height * scale));
-            cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
-            return cv.toDataURL("image/jpeg", quality);
-          };
-          let out = draw(900, 0.6);
-          // Keep the room document well under Firestore's 1MB limit
-          if (out.length > 380000) out = draw(640, 0.5);
-          if (out.length > 380000) out = draw(480, 0.45);
-          resolve(out);
-        } catch (err) {
-          reject(new Error("Could not process that photo."));
-        }
-      };
-      img.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error("Could not read that photo."));
-      };
-      img.src = url;
-    });
-  }
-
   async function handlePhotoPick(input) {
     const file = input.files && input.files[0];
     if (!file) return;
     toast("Preparing photo…");
     try {
-      photoDraft = await compressImage(file);
+      photoDraft = await JLTools.compressImage(file);
       photoDraftQ = (JLNet.room && JLNet.room.pendingQuestion && JLNet.room.pendingQuestion.id) || null;
       applyPhotoPreview();
       toast("Photo ready — hit Send.");
@@ -824,7 +836,7 @@
   function renderCurses() {
     const list = (JLNet.room && JLNet.room.activeCurses) || [];
     const root = $("hider-curses");
-    const sig = JSON.stringify([list.map((c) => c.id), size()]);
+    const sig = JSON.stringify([list.map((c) => [c.id, !!(c.proof && c.proof.photo), c.proof && c.proof.at]), size()]);
     if (!sigChanged("curses", sig)) return;
     if (!list.length) {
       root.innerHTML = `<p class="empty">No curses on the seekers right now.</p>`;
@@ -833,14 +845,22 @@
     root.innerHTML = list.map((c) => {
       const def = JLDeck.CURSES.find((d) => d.id === c.cardId);
       const bonus = def && def.bonusBySize ? def.bonusBySize[size()] : 0;
+      const proof = c.proof && c.proof.photo;
       return `<article class="curse-card">
         <header><strong>${escapeHtml(c.name)}</strong>
           ${c.blocksQuestions || c.blocksTransit ? `<span class="chip-warn">Blocks ${[c.blocksQuestions ? "questions" : "", c.blocksTransit ? "transit" : ""].filter(Boolean).join(" + ")}</span>` : ""}
         </header>
         <p>${escapeHtml(c.effect)}</p>
+        ${proof
+          ? `<img class="curse-proof-thumb" src="${proof}" alt="Seeker proof">
+             ${c.proof.note ? `<p>${escapeHtml(c.proof.note)}</p>` : ""}
+             <p class="hint">Seekers sent proof. Confirm only if it actually completes the curse.</p>`
+          : `<p class="hint">Waiting for photo proof from the seekers.</p>`}
         <div class="actions">
           ${bonus ? `<button type="button" class="btn btn-teal" data-h="bonus" data-min="${bonus}" data-why="${escapeHtml(c.name)}">They broke it · +${bonus} min</button>` : ""}
-          <button type="button" class="btn btn-ghost" data-h="clear-curse" data-id="${escapeHtml(c.id)}" data-name="${escapeHtml(c.name)}">They cleared it</button>
+          ${proof ? `<button type="button" class="btn btn-ghost" data-h="view-proof" data-id="${escapeHtml(c.id)}">View proof</button>` : ""}
+          ${proof ? `<button type="button" class="btn btn-ghost" data-h="reject-proof" data-id="${escapeHtml(c.id)}" data-name="${escapeHtml(c.name)}">Reject proof</button>` : ""}
+          <button type="button" class="btn ${proof ? "btn-amber" : "btn-ghost"}" data-h="clear-curse" data-id="${escapeHtml(c.id)}" data-name="${escapeHtml(c.name)}">${proof ? "Accept and clear" : "I saw them clear it"}</button>
         </div>
       </article>`;
     }).join("");
@@ -973,5 +993,5 @@
       ).join("")}</div>`;
   }
 
-  global.JLHider = { start, render, ensureTable };
+  global.JLHider = { start, render, ensureTable, reset };
 })(window);

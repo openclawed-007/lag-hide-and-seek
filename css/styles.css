@@ -641,6 +641,14 @@ input:focus, select:focus { outline: none; }
 .banner-card span { color: var(--muted); font-size: 12px; line-height: 1.4; }
 .banner-card.is-wait { border-color: rgba(232,176,74,.35); }
 .banner-card.is-curse { border-color: rgba(212,93,114,.4); }
+.curse-proof-thumb {
+  width: 100%;
+  max-height: 160px;
+  object-fit: cover;
+  border-radius: 10px;
+  margin-top: 6px;
+  background: #000;
+}
 
 .toast {
   position: fixed;

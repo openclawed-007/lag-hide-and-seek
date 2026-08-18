@@ -8,6 +8,8 @@ function memoryStorage() {
     getItem: (key) => values.has(key) ? values.get(key) : null,
     setItem: (key, value) => values.set(key, String(value)),
     removeItem: (key) => values.delete(key),
+    get length() { return values.size; },
+    key: (i) => Array.from(values.keys())[i] || null,
   };
 }
 
@@ -59,7 +61,7 @@ assert.strictEqual(table.drawPile.length + table.hand.length + table.discard.len
   await JLNet.send('cards.sync', { overflowingLeft: 0, handCount: 2 });
   assert.strictEqual(JLNet.room.overflowingLeft, 0, 'Chalice counter must synchronize down to zero');
 
-  JLNet.leave();
+  await JLNet.leave();
   const host = await JLNet.join(code, 'seeker');
   await JLNet.send('timer', {
     phase: 'hiding', running: true, hideStartedAt: Date.now(), hideElapsedMs: 0,
@@ -68,10 +70,32 @@ assert.strictEqual(table.drawPile.length + table.hand.length + table.discard.len
   await JLNet.send('timer.vote', { action: 'pause' });
   assert.strictEqual(JLNet.room.timer.running, true, 'seeker vote alone must not pause a linked game');
   assert.strictEqual(JLNet.room.timer.pauseVotes.seeker, true);
-  JLNet.leave();
+  await JLNet.leave();
   await JLNet.join(code, 'hider');
   await JLNet.send('timer.vote', { action: 'pause' });
   assert.strictEqual(JLNet.room.timer.running, false, 'both votes should pause the timer');
+
+  await JLNet.send('curse.play', { id: 'c-test', name: 'The Lemon Phylactery', effect: 'Find a lemon.' });
+  assert.strictEqual(JLNet.room.activeCurses.length, 1);
+  await JLNet.leave();
+  await JLNet.join(code, 'seeker');
+  await assert.rejects(
+    () => JLNet.send('curse.clear', { id: 'c-test', name: 'The Lemon Phylactery' }),
+    /hider/,
+    'seekers must not clear a curse themselves'
+  );
+  await JLNet.send('curse.proof', { id: 'c-test', photo: 'data:image/jpeg;base64,xx', note: 'lemon on shirt' });
+  assert.ok(JLNet.room.activeCurses[0].proof, 'seekers can send proof');
+  await JLNet.leave();
+  await JLNet.join(code, 'hider');
+  await JLNet.send('curse.clear', { id: 'c-test', name: 'The Lemon Phylactery' });
+  assert.strictEqual(JLNet.room.activeCurses.length, 0, 'hider confirms the curse is cleared');
+
+  await JLNet.leave();
+  const solo = await JLNet.create({ size: 'L', presetName: 'Wipe' });
+  const soloCode = solo.code;
+  await JLNet.leave();
+  await assert.rejects(() => JLNet.join(soloCode, 'hider'), /No game/, 'last player leave must wipe the room');
 
   JLNet.stop();
   console.log('game logic tests passed');

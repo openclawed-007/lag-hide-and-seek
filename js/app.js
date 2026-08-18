@@ -80,8 +80,8 @@
       JLHider.start();
       return;
     }
-    if (JLState.get().playable) {
-      if (netOk && JLNet.role === "seeker") bindRoom();
+    if (netOk && JLNet.role === "seeker" && JLState.get().playable) {
+      bindRoom();
       enterPlay(true);
       return;
     }
@@ -298,7 +298,16 @@
         const clip = JLPresets.bboxPolygon([sLat, wLng, nLat, eLng]);
         poly = JLGeo.safeIntersect(poly, clip) || poly;
       }
-      JLState.patch({ presetId: preset.id, presetName: preset.name });
+      const keep = {
+        size: s.size,
+        units: s.units,
+        presetId: preset.id,
+        presetName: preset.name,
+        transit: s.transit,
+        layers: s.layers,
+      };
+      JLState.reset();
+      JLState.patch(keep);
       JLState.setGeo(poly, poly);
       await ensureSeekerRoom();
       enterPlay(false);
@@ -316,8 +325,17 @@
   }
 
   function startCustom() {
+    const s = JLState.get();
+    JLState.reset();
+    JLState.patch({
+      size: s.size,
+      units: s.units,
+      transit: s.transit,
+      layers: s.layers,
+      presetId: "custom",
+      presetName: "Custom",
+    });
     const worldish = turf.bboxPolygon([-20, 35, 20, 60]);
-    JLState.patch({ presetId: "custom", presetName: "Custom" });
     JLState.setGeo(worldish, worldish);
     ensureSeekerRoom().then(() => {
       enterPlay(false);
@@ -367,6 +385,13 @@
   }
 
   function onRoom(snap) {
+    if (snap.endedCode) {
+      JLTools.toast("That game ended because everyone left.");
+      JLState.reset();
+      if (window.JLHider) JLHider.reset();
+      showStart();
+      return;
+    }
     const room = snap.room;
     renderInvite(room);
     renderSeekerBanners(room);
@@ -413,8 +438,15 @@
       bits.push(`<div class="banner-card is-wait"><b>Waiting for the hider</b><span>${escapeHtml(room.pendingQuestion.title)}</span></div>`);
     }
     (room.activeCurses || []).forEach((c) => {
+      const proof = c.proof && c.proof.photo;
       bits.push(`<div class="banner-card is-curse"><b>${escapeHtml(c.name)}</b><span>${escapeHtml(c.effect)}</span>
-        <button type="button" class="btn btn-ghost" data-clear-curse="${escapeHtml(c.id)}" data-clear-name="${escapeHtml(c.name)}">We cleared it</button></div>`);
+        ${proof
+          ? `<span>Proof sent — waiting for the hider to confirm.</span>
+             <img class="curse-proof-thumb" src="${proof}" alt="Your proof">
+             <button type="button" class="btn btn-ghost" data-view-proof="${escapeHtml(c.id)}">View proof</button>`
+          : `<span>The hider has to confirm this. Send a photo of you completing it.</span>
+             <label class="btn btn-amber photo-pick">📷 Send proof<input type="file" accept="image/*" capture="environment" data-curse-proof="${escapeHtml(c.id)}" data-curse-name="${escapeHtml(c.name)}" hidden></label>`}
+      </div>`);
     });
     if (room.disabledCategory) {
       bits.push(`<div class="banner-card"><b>Spotty Memory</b><span>${escapeHtml(room.disabledCategory)} questions are disabled until you ask something else.</span></div>`);
@@ -437,9 +469,35 @@
     }
     bar.innerHTML = bits.join("");
     bar.hidden = !bits.length;
-    bar.querySelectorAll("[data-clear-curse]").forEach((btn) => {
+    bar.querySelectorAll("[data-curse-proof]").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        try {
+          JLTools.toast("Preparing proof…");
+          const photo = await JLTools.compressImage(file);
+          await JLNet.send("curse.proof", {
+            id: input.getAttribute("data-curse-proof"),
+            name: input.getAttribute("data-curse-name"),
+            photo,
+          });
+          JLTools.toast("Proof sent. The hider has to confirm it.");
+        } catch (err) {
+          JLTools.toast(err.message || "Could not send that proof.");
+        }
+        input.value = "";
+      });
+    });
+    bar.querySelectorAll("[data-view-proof]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        JLNet.send("curse.clear", { id: btn.getAttribute("data-clear-curse"), name: btn.getAttribute("data-clear-name") }).catch((err) => JLTools.toast(err.message));
+        const curse = (room.activeCurses || []).find((c) => c.id === btn.getAttribute("data-view-proof"));
+        if (curse && curse.proof) {
+          JLTools.showPhoto({
+            title: curse.name + " — your proof",
+            photo: curse.proof.photo,
+            note: curse.proof.note || "Waiting for the hider to confirm.",
+          });
+        }
       });
     });
   }
@@ -608,12 +666,22 @@
       }
     });
     $("btn-new").addEventListener("click", async () => {
-      const ok = await JLTools.confirm("Your map and log stay saved on this device — you can resume from the home screen.", {
-        title: "Leave this map?",
-        confirmLabel: "Go home",
-      });
+      const linked = !!JLNet.code;
+      const ok = await JLTools.confirm(
+        linked
+          ? "This removes you from the shared game. If the hider has also left, the room is deleted and the code will not work again."
+          : "Go back to the home screen? Start a new game to wipe this map.",
+        {
+          title: linked ? "Leave this game?" : "Leave this map?",
+          confirmLabel: "Leave",
+          danger: true,
+        }
+      );
       if (!ok) return;
       JLTools.cancel();
+      if (linked) await JLNet.leave();
+      JLState.reset();
+      if (window.JLHider) JLHider.reset();
       showStart();
     });
     $("btn-reset").addEventListener("click", async () => {

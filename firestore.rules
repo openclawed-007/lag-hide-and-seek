@@ -22,9 +22,12 @@ service cloud.firestore {
           'disabledCategory', 'overflowingLeft', 'handCount', 'deckLeft',
           'maxHand', 'move', 'log',
           'seekers', 'hiders', 'seekerOnline', 'hiderOnline', 'seekerLocs',
-          'events'
+          'events', 'ended'
         ]);
-      allow delete: if false;
+      allow delete: if resource.data.expiresAt <= request.time.toMillis()
+        || resource.data.ended == true
+        || !('players' in resource.data)
+        || resource.data.players.size() == 0;
     }
   }
 }

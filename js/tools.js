@@ -451,7 +451,7 @@
       host.hidden = true;
       host.innerHTML = `
         <div class="modal__card modal__card--photo">
-          <div class="kicker">Photo from the hider</div>
+          <div class="kicker" id="jl-photo-kicker">Photo</div>
           <h2 id="jl-photo-title"></h2>
           <img id="jl-photo-img" alt="Photo from the hider">
           <p class="hint" id="jl-photo-note"></p>
@@ -470,6 +470,8 @@
       }, true);
       document.body.appendChild(host);
     }
+    const kicker = host.querySelector("#jl-photo-kicker");
+    if (kicker) kicker.textContent = answer.kicker || (answer.kind === "photo" ? "Photo from the hider" : "Photo");
     host.querySelector("#jl-photo-title").textContent = answer.title || "Photo";
     host.querySelector("#jl-photo-img").src = answer.photo;
     const noteEl = host.querySelector("#jl-photo-note");
@@ -1235,6 +1237,37 @@
     else if (active === "draw") renderDraw();
   }
 
+  function compressImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        try {
+          const draw = (maxSide, quality) => {
+            const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+            const cv = document.createElement("canvas");
+            cv.width = Math.max(1, Math.round(img.width * scale));
+            cv.height = Math.max(1, Math.round(img.height * scale));
+            cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+            return cv.toDataURL("image/jpeg", quality);
+          };
+          let out = draw(900, 0.6);
+          if (out.length > 380000) out = draw(640, 0.5);
+          if (out.length > 380000) out = draw(480, 0.45);
+          resolve(out);
+        } catch {
+          reject(new Error("Could not process that photo."));
+        }
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(url);
+        reject(new Error("Could not read that photo."));
+      };
+      img.src = url;
+    });
+  }
+
   global.JLTools = {
     activate,
     cancel,
@@ -1248,6 +1281,8 @@
     remember,
     applyRemoteAnswer,
     waitingInspector,
+    compressImage,
+    showPhoto: showHiderPhoto,
     setOnRender(fn) { onNeedRender = fn; },
   };
 })(window);
