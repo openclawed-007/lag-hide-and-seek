@@ -46,6 +46,12 @@
     });
   }
 
+  function friendlyFirebaseError(err, fallback) {
+    const msg = String((err && err.message) || err || "");
+    if (/permission|insufficient/i.test(msg)) return new Error(fallback || "No game with that code, or it has expired.");
+    return err instanceof Error ? err : new Error(msg || fallback || "Request failed");
+  }
+
   function setMyLocation(loc) {
     myLoc = loc && loc.lat != null
       ? { lat: +loc.lat, lng: +loc.lng, acc: loc.acc != null ? Math.round(loc.acc) : null }
@@ -350,16 +356,20 @@
       role = joinRole;
       token = (joinRole === "hider" ? "h-" : "s-") + cryptoToken();
       const ref = roomRef(code);
-      await firestore.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists || (snap.data().expiresAt || 0) <= Date.now()) throw new Error("No game with that code.");
-        const store = snap.data();
-        store.players = (store.players || []).concat([{ role, token, seen: Date.now() }]).slice(-12);
-        store.seq = (store.seq || 0) + 1;
-        store.touched = Date.now();
-        tx.set(ref, store);
-        room = publicFirebaseRoom(store);
-      });
+      try {
+        await firestore.runTransaction(async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists || (snap.data().expiresAt || 0) <= Date.now()) throw new Error("No game with that code.");
+          const store = snap.data();
+          store.players = (store.players || []).concat([{ role, token, seen: Date.now() }]).slice(-12);
+          store.seq = (store.seq || 0) + 1;
+          store.touched = Date.now();
+          tx.set(ref, store);
+          room = publicFirebaseRoom(store);
+        });
+      } catch (err) {
+        throw friendlyFirebaseError(err, "No game with that code, or it has expired.");
+      }
     } else if (await health()) {
       mode = "api";
       const data = await api("/api/rooms/" + joinCode + "/join", {
@@ -440,22 +450,30 @@
     if (!code || !token) throw new Error("Not in a game.");
     if (mode === "firebase") {
       const ref = roomRef(code);
-      await firestore.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists) throw new Error("Room lost.");
-        const store = snap.data();
-        const player = (store.players || []).find((p) => p.token === token && p.role === role);
-        if (!player) throw new Error("This device is not in that game.");
-        player.seen = Date.now();
-        if (type === "ping" && payload && payload.loc && role === "seeker") {
-          player.loc = payload.loc;
-          player.locAt = Date.now();
-        }
-        applyLocal(store, type, payload || {}, role);
-        store.touched = Date.now();
-        tx.set(ref, store);
-        room = publicFirebaseRoom(store);
-      });
+      try {
+        await firestore.runTransaction(async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists) throw new Error("Room lost.");
+          const store = snap.data();
+          const player = (store.players || []).find((p) => p.token === token && p.role === role);
+          if (!player) throw new Error("This device is not in that game.");
+          player.seen = Date.now();
+          if (type === "ping" && payload && payload.loc && role === "seeker") {
+            player.loc = {
+              lat: +payload.loc.lat,
+              lng: +payload.loc.lng,
+              acc: payload.loc.acc != null ? Math.round(payload.loc.acc) : null,
+            };
+            player.locAt = Date.now();
+          }
+          applyLocal(store, type, payload || {}, role);
+          store.touched = Date.now();
+          tx.set(ref, store);
+          room = publicFirebaseRoom(store);
+        });
+      } catch (err) {
+        throw friendlyFirebaseError(err, "Could not update the game. Try joining again.");
+      }
       emit();
       return room;
     }

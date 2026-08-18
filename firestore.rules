@@ -6,7 +6,11 @@ service cloud.firestore {
         && request.resource.data.created is int
         && request.resource.data.expiresAt is int
         && request.resource.data.expiresAt <= request.time.toMillis() + 172800000;
-      allow read: if resource.data.expiresAt > request.time.toMillis();
+      // Missing docs must be readable so join/create can check existence
+      // instead of failing as "insufficient permissions".
+      allow get: if resource == null
+        || resource.data.expiresAt > request.time.toMillis();
+      allow list: if false;
       allow update: if resource.data.expiresAt > request.time.toMillis()
         && request.resource.data.code == resource.data.code
         && request.resource.data.created == resource.data.created
@@ -16,7 +20,9 @@ service cloud.firestore {
           'seq', 'touched', 'meta', 'phase', 'players', 'pendingQuestion',
           'lastAnswer', 'activeCurses', 'timer', 'bannedQuestions',
           'disabledCategory', 'overflowingLeft', 'handCount', 'deckLeft',
-          'maxHand', 'move', 'log'
+          'maxHand', 'move', 'log',
+          'seekers', 'hiders', 'seekerOnline', 'hiderOnline', 'seekerLocs',
+          'events'
         ]);
       allow delete: if false;
     }
