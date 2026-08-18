@@ -346,9 +346,12 @@
 
   async function ensureSeekerRoom() {
     if (JLNet.code && JLNet.role === "seeker") {
-      bindRoom();
-      pushMeta();
-      return;
+      if (await JLNet.alive()) {
+        bindRoom();
+        pushMeta();
+        return;
+      }
+      await JLNet.leave();
     }
     const s = JLState.get();
     try {

@@ -208,9 +208,7 @@ def should_wipe(room):
 
 
 def should_wipe_on_leave(room):
-    if should_wipe(room):
-        return True
-    return len(present_players(room)) == 0
+    return should_wipe(room)
 
 
 def prune():
