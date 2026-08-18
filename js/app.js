@@ -568,13 +568,22 @@
         renderStations();
       }
     });
-    $("btn-new").addEventListener("click", () => {
-      if (!confirm("Leave this map and go home?")) return;
+    $("btn-new").addEventListener("click", async () => {
+      const ok = await JLTools.confirm("Your map and log stay saved on this device — you can resume from the home screen.", {
+        title: "Leave this map?",
+        confirmLabel: "Go home",
+      });
+      if (!ok) return;
       JLTools.cancel();
       showStart();
     });
-    $("btn-reset").addEventListener("click", () => {
-      if (!confirm("Reset remaining area back to the full map? Question log stays.")) return;
+    $("btn-reset").addEventListener("click", async () => {
+      const ok = await JLTools.confirm("The remaining area goes back to the full map. The question log stays.", {
+        title: "Reset all cuts?",
+        confirmLabel: "Reset cuts",
+        danger: true,
+      });
+      if (!ok) return;
       const s = JLState.get();
       JLState.setGeo(s.playable, s.playable);
       JLMap.paintMasks(s.playable, s.playable);
@@ -684,15 +693,19 @@
     JLState.patch({ timer: next });
   }
 
-  function endHidePeriod() {
+  async function endHidePeriod() {
     const t = JLState.get().timer;
     if (t.phase !== "hiding") return;
-    if (!confirm("End the hiding period and start the seek clock?")) return;
+    const ok = await JLTools.confirm("This ends the hiding period and starts the seek clock.", {
+      title: "Begin the seek?",
+      confirmLabel: "Begin seek",
+    });
+    if (!ok) return;
     JLState.startSeekClock();
     pushTimer();
   }
 
-  function toggleTimer() {
+  async function toggleTimer() {
     const t = JLState.get().timer;
     if (!t.phase || t.phase === "idle") {
       JLState.startHidePeriod();
@@ -701,14 +714,16 @@
     }
     const action = t.running ? "pause" : "resume";
     const both = linkedGame();
-    const msg = t.running
-      ? (both
-        ? "Pause the clock? It only stops after both the hider and the seekers confirm."
-        : "Pause the clock?")
-      : (both
-        ? "Resume the clock? It only starts again after both sides confirm."
-        : "Resume the clock?");
-    if (!confirm(msg)) return;
+    const detail = both
+      ? (action === "pause"
+        ? "The clock only stops after both the hider and the seekers confirm."
+        : "The clock only starts again after both sides confirm.")
+      : "";
+    const ok = await JLTools.confirm(detail, {
+      title: action === "pause" ? "Pause the clock?" : "Resume the clock?",
+      confirmLabel: action === "pause" ? "Pause" : "Resume",
+    });
+    if (!ok) return;
     if (JLNet.code) {
       JLNet.send("timer.vote", { action }).catch((err) => JLTools.toast(err.message));
       if (!both) {

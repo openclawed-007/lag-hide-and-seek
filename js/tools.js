@@ -153,6 +153,77 @@
     toast._t = setTimeout(() => el.classList.remove("is-on"), 3200);
   }
 
+  /* ---------- Styled confirm dialog (replaces window.confirm) ---------- */
+  let confirmResolve = null;
+  let confirmReturnFocus = null;
+
+  function ensureConfirmDom() {
+    let host = document.getElementById("jl-confirm");
+    if (host) return host;
+    host = document.createElement("div");
+    host.id = "jl-confirm";
+    host.className = "modal";
+    host.hidden = true;
+    host.innerHTML = `
+      <div class="modal__card modal__card--confirm" role="alertdialog" aria-modal="true" aria-labelledby="jl-confirm-title">
+        <h2 id="jl-confirm-title"></h2>
+        <p class="hint" id="jl-confirm-msg"></p>
+        <div class="actions actions--end">
+          <button type="button" class="btn btn-ghost" data-c="no">Cancel</button>
+          <button type="button" class="btn btn-amber" data-c="yes">Confirm</button>
+        </div>
+      </div>`;
+    const settle = (v) => {
+      host.hidden = true;
+      const r = confirmResolve;
+      confirmResolve = null;
+      if (confirmReturnFocus && confirmReturnFocus.focus) {
+        try { confirmReturnFocus.focus(); } catch { /* ignore */ }
+      }
+      confirmReturnFocus = null;
+      if (r) r(v);
+    };
+    host._settle = settle;
+    host.addEventListener("click", (e) => {
+      if (e.target === host) return settle(false);
+      const b = e.target.closest("[data-c]");
+      if (b) settle(b.getAttribute("data-c") === "yes");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (host.hidden) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        settle(false);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const no = host.querySelector('[data-c="no"]');
+        settle(document.activeElement !== no);
+      }
+    }, true);
+    document.body.appendChild(host);
+    return host;
+  }
+
+  function confirmDialog(message, opts) {
+    opts = opts || {};
+    const host = ensureConfirmDom();
+    if (confirmResolve) host._settle(false);
+    return new Promise((resolve) => {
+      confirmResolve = resolve;
+      confirmReturnFocus = document.activeElement;
+      host.querySelector("#jl-confirm-title").textContent = opts.title || "Are you sure?";
+      const msgEl = host.querySelector("#jl-confirm-msg");
+      msgEl.textContent = message || "";
+      msgEl.hidden = !message;
+      const yes = host.querySelector('[data-c="yes"]');
+      yes.textContent = opts.confirmLabel || "Confirm";
+      yes.className = "btn " + (opts.danger ? "btn-rose" : "btn-amber");
+      host.hidden = false;
+      yes.focus();
+    });
+  }
+
   function inspectorRoot() {
     return document.getElementById("jl-inspector");
   }
@@ -1057,15 +1128,21 @@
   }
 
   function commitBounds(poly, name) {
-    if (!confirm("Replace the playable map with this shape? Remaining area resets.")) return;
-    JLState.patch({ presetId: "custom", presetName: name });
-    JLState.setGeo(poly, poly);
-    JLMap.paintMasks(poly, poly);
-    JLMap.fitPlayable(poly);
-    JLMap.drawGroup().clearLayers();
-    drawPts = [];
-    cancel();
-    toast("New map borders set. Features outside no longer exist.");
+    confirmDialog("Everything outside this shape stops existing, and the remaining area resets.", {
+      title: "Replace the map borders?",
+      confirmLabel: "Replace borders",
+      danger: true,
+    }).then((ok) => {
+      if (!ok) return;
+      JLState.patch({ presetId: "custom", presetName: name });
+      JLState.setGeo(poly, poly);
+      JLMap.paintMasks(poly, poly);
+      JLMap.fitPlayable(poly);
+      JLMap.drawGroup().clearLayers();
+      drawPts = [];
+      cancel();
+      toast("New map borders set. Features outside no longer exist.");
+    });
   }
 
   function renderDraw() {
@@ -1129,6 +1206,7 @@
     placeZoneOnStation,
     renderActive,
     toast,
+    confirm: confirmDialog,
     applyHere,
     remember,
     applyRemoteAnswer,

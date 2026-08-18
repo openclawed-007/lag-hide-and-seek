@@ -85,8 +85,13 @@
     bound = true;
     $("hider").addEventListener("click", onClick);
     $("hider-pause").addEventListener("click", requestTimerVote);
-    $("hider-leave").addEventListener("click", () => {
-      if (!confirm("Leave this game on this phone?")) return;
+    $("hider-leave").addEventListener("click", async () => {
+      const ok = await JLTools.confirm("You can rejoin with the same code while the game is live.", {
+        title: "Leave this game?",
+        confirmLabel: "Leave",
+        danger: true,
+      });
+      if (!ok) return;
       JLNet.leave();
       location.href = location.pathname;
     });
@@ -364,7 +369,12 @@
       const copy = Object.assign({}, src, { uid: src.uid + "-dup-" + Date.now().toString(36), copied: true });
       table.hand.push(copy);
     } else if (card.defId === "move") {
-      if (!confirm("Move discards your whole hand and you must tell seekers your original station. Play it?")) return;
+      const okMove = await JLTools.confirm("Move discards your whole hand, and you must tell the seekers your original station.", {
+        title: "Play Move?",
+        confirmLabel: "Play Move",
+        danger: true,
+      });
+      if (!okMove) return;
       const mins = (card.minutes && card.minutes[size()]) || 30;
       JLDeck.playFromHand(table, card.uid);
       table.hand.slice().forEach((c) => JLDeck.playFromHand(table, c.uid));
@@ -463,10 +473,16 @@
     const t = (JLNet.room && JLNet.room.timer) || {};
     if (!t.phase || t.phase === "idle") return toast("The clock has not started yet.");
     const action = t.running ? "pause" : "resume";
-    const msg = t.running
-      ? "Pause the clock? It only stops after both you and the seekers confirm."
-      : "Resume the clock? It only starts again after both sides confirm.";
-    if (!confirm(msg)) return;
+    const ok = await JLTools.confirm(
+      t.running
+        ? "The clock only stops after both you and the seekers confirm."
+        : "The clock only starts again after both sides confirm.",
+      {
+        title: t.running ? "Pause the clock?" : "Resume the clock?",
+        confirmLabel: t.running ? "Pause" : "Resume",
+      }
+    );
+    if (!ok) return;
     try {
       await JLNet.send("timer.vote", { action });
     } catch (err) {
