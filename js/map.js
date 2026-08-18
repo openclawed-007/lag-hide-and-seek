@@ -54,7 +54,9 @@
     railLayer = L.tileLayer("https://{s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png", {
       attribution: '&copy; OpenRailwayMap',
       maxZoom: 19,
-      opacity: 0.85,
+      minZoom: 6, // country-level views drown in rail detail — let the base map breathe
+      opacity: 0.5,
+      className: "rail-tiles",
     });
 
     roadsDark.addTo(map);
@@ -64,7 +66,7 @@
     ruledLayer = L.layerGroup().addTo(map);
     flashLayer = L.layerGroup().addTo(map);
     playableOutline = L.geoJSON(null, {
-      style: { color: "#f5c15c", weight: 1.5, opacity: 0.85, fill: false, dashArray: "6 8" },
+      style: { color: "#f5c15c", weight: 1.25, opacity: 0.55, fill: false, dashArray: "4 8" },
     }).addTo(map);
     previewLayer = L.layerGroup().addTo(map);
     zoneLayer = L.layerGroup().addTo(map);
@@ -123,7 +125,7 @@
       L.polygon(maskLatLngs, {
         stroke: false,
         fillColor: "#070b14",
-        fillOpacity: 0.78,
+        fillOpacity: 0.84,
         interactive: false,
         pane: "overlayPane",
       }).addTo(oobLayer);
@@ -136,7 +138,7 @@
         style: {
           stroke: false,
           fillColor: "#d7e7ff",
-          fillOpacity: 0.07,
+          fillOpacity: 0.05,
           interactive: false,
         },
       }).addTo(oobLayer);
@@ -147,19 +149,11 @@
       if (ruled) {
         L.geoJSON(ruled, {
           style: {
-            stroke: false,
-            fillColor: "#6b3044",
-            fillOpacity: 0.5,
-            interactive: false,
-          },
-        }).addTo(ruledLayer);
-
-        L.geoJSON(ruled, {
-          style: {
             color: "#c45a72",
             weight: 1,
-            opacity: 0.35,
-            fill: false,
+            opacity: 0.2,
+            fillColor: "#4a1f2c",
+            fillOpacity: 0.55,
             interactive: false,
           },
         }).addTo(ruledLayer);

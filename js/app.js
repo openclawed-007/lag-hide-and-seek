@@ -880,10 +880,18 @@
     stationLoadTimer = setTimeout(() => loadStations(false), immediate ? 80 : 700);
   }
 
+  let lastStationLoadAt = 0;
+
   async function loadStations(force) {
     const m = JLMap.getMap();
     if (!m) return;
     if (!force && m.getZoom() < 9) return;
+    // Don't hammer Overpass while panning around — auto loads at most every 4s
+    if (!force && Date.now() - lastStationLoadAt < 4000) {
+      scheduleStationLoad();
+      return;
+    }
+    lastStationLoadAt = Date.now();
     $("btn-load-stations").classList.add("is-busy");
     try {
       const bbox = JLOverpass.bboxFromMap(m);

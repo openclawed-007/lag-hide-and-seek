@@ -1,17 +1,48 @@
 /* Overpass + Nominatim — stations, POIs, admin areas */
 (function (global) {
+  /* Ordered by observed reliability. The main .de instance rate-limits and 504s
+     under load (browsers report those as CORS failures). mail.ru is a full mirror
+     with area data (needed for is_in admin queries); kumi is flaky and lacks
+     areas, so it is a last resort for simple POI lookups only. */
   const MIRRORS = [
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
   ];
 
   const cache = new Map();
   const inflight = new Map();
+  const penaltyUntil = new Map(); // mirror -> timestamp to skip until
+  let preferredMirror = null;
+  try { preferredMirror = localStorage.getItem("lag-overpass-mirror"); } catch { /* ignore */ }
+
+  function mirrorOrder() {
+    const now = Date.now();
+    const list = MIRRORS.slice();
+    if (preferredMirror && list.includes(preferredMirror)) {
+      list.splice(list.indexOf(preferredMirror), 1);
+      list.unshift(preferredMirror);
+    }
+    // Healthy mirrors first; penalized ones as a last resort
+    const ok = list.filter((u) => (penaltyUntil.get(u) || 0) <= now);
+    const bad = list.filter((u) => (penaltyUntil.get(u) || 0) > now);
+    return ok.concat(bad);
+  }
+
+  function penalize(url, ms) {
+    penaltyUntil.set(url, Date.now() + ms);
+  }
+
+  function rememberGood(url) {
+    preferredMirror = url;
+    try { localStorage.setItem("lag-overpass-mirror", url); } catch { /* ignore */ }
+  }
 
   function bboxFromMap(map) {
     const b = map.getBounds();
-    return `${b.getSouth()},${b.getWest()},${b.getNorth()},${b.getEast()}`;
+    // Quantize outward (~110m grid) so tiny pans hit the query cache
+    const q = (v, up) => (up ? Math.ceil(v * 1000) / 1000 : Math.floor(v * 1000) / 1000);
+    return `${q(b.getSouth(), false)},${q(b.getWest(), false)},${q(b.getNorth(), true)},${q(b.getEast(), true)}`;
   }
 
   function bboxFromFeature(feature) {
@@ -31,29 +62,38 @@
     if (cache.has(ck)) return cache.get(ck);
     if (inflight.has(ck)) return inflight.get(ck);
 
-    const body = ql;
+    // Form-encoded "data=" is what Overpass instances canonically accept,
+    // and it stays a CORS "simple request" (no preflight to reject).
+    const body = "data=" + encodeURIComponent(ql);
     const job = (async () => {
       let lastErr;
-      for (const url of MIRRORS) {
+      for (const url of mirrorOrder()) {
         try {
           const ctrl = new AbortController();
-          const t = setTimeout(() => ctrl.abort(), 28000);
+          const t = setTimeout(() => ctrl.abort(), 16000);
           const res = await fetch(url, {
             method: "POST",
-            headers: { "Content-Type": "text/plain" },
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body,
             signal: ctrl.signal,
           });
           clearTimeout(t);
-          if (!res.ok) throw new Error("Overpass " + res.status);
+          if (!res.ok) {
+            // Rate-limited / overloaded: rest this mirror longer
+            penalize(url, res.status === 429 || res.status === 504 ? 90000 : 30000);
+            throw new Error("Overpass " + res.status);
+          }
           const data = await res.json();
+          rememberGood(url);
           cache.set(ck, data);
           return data;
         } catch (err) {
+          if (err && err.name === "AbortError") penalize(url, 45000);
+          else if (!penaltyUntil.has(url) || penaltyUntil.get(url) < Date.now()) penalize(url, 30000);
           lastErr = err;
         }
       }
-      throw lastErr || new Error("Overpass unavailable");
+      throw lastErr || new Error("All Overpass mirrors are busy — try again shortly.");
     })();
 
     inflight.set(ck, job);

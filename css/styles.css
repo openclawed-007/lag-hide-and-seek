@@ -743,6 +743,12 @@ input:focus, select:focus { outline: none; }
   border-radius: 8px !important;
   box-shadow: none !important;
 }
+/* Rail overlay: desaturate + dim so lines inform without covering labels */
+.rail-tiles {
+  filter: saturate(0.7) brightness(0.85);
+  transition: opacity .3s;
+}
+
 /* Map gameplay animations */
 .jl-flash {
   pointer-events: none;
