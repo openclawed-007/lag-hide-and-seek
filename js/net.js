@@ -10,6 +10,7 @@
   let lastSince = 0;
   let stopped = false;
   let publicOrigin = null;
+  let myLoc = null;
   let firestore = null;
   let unsubscribeFirestore = null;
   const channelName = () => "lag-room-" + code;
@@ -39,7 +40,16 @@
       hiders: hiders.length,
       seekerOnline: seekers.some((p) => now - (p.seen || 0) < 30000),
       hiderOnline: hiders.some((p) => now - (p.seen || 0) < 30000),
+      seekerLocs: seekers
+        .filter((p) => p.loc && now - (p.locAt || 0) < 180000)
+        .map((p) => ({ lat: p.loc.lat, lng: p.loc.lng, acc: p.loc.acc || null, at: p.locAt })),
     });
+  }
+
+  function setMyLocation(loc) {
+    myLoc = loc && loc.lat != null
+      ? { lat: +loc.lat, lng: +loc.lng, acc: loc.acc != null ? Math.round(loc.acc) : null }
+      : null;
   }
 
   function emit() {
@@ -267,6 +277,12 @@
     } else if (etype === "ping") {
       if (playerRole === "hider") store.hiderOnline = true;
       if (playerRole === "seeker") store.seekerOnline = true;
+      // Local/API stores have no players array — track seeker location at root.
+      // (Firebase mode stores it on the player entry instead; see send().)
+      if (payload.loc && playerRole === "seeker" && !store.players) {
+        store.seekerLocs = [Object.assign({ at: Date.now() }, payload.loc)];
+        store.seq = (store.seq || 0) + 1;
+      }
       return store;
     }
     store.seq = (store.seq || 0) + 1;
@@ -431,6 +447,10 @@
         const player = (store.players || []).find((p) => p.token === token && p.role === role);
         if (!player) throw new Error("This device is not in that game.");
         player.seen = Date.now();
+        if (type === "ping" && payload && payload.loc && role === "seeker") {
+          player.loc = payload.loc;
+          player.locAt = Date.now();
+        }
         applyLocal(store, type, payload || {}, role);
         store.touched = Date.now();
         tx.set(ref, store);
@@ -491,11 +511,12 @@
     const tick = async () => {
       if (stopped) return;
       try {
+        const pingPayload = (role === "seeker" && myLoc) ? { loc: myLoc } : {};
         if (mode === "api") {
-          await send("ping", {});
+          await send("ping", pingPayload);
           await refresh();
         } else {
-          await send("ping", {});
+          await send("ping", pingPayload);
         }
       } catch (err) {
         console.warn(err);
@@ -566,6 +587,7 @@
     join,
     resume,
     send,
+    setMyLocation,
     refresh,
     leave,
     stop,

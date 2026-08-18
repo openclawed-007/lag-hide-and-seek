@@ -77,6 +77,99 @@
     bindOnce();
     render();
     JLNet.onChange(render);
+    setTimeout(ensureSeekerMap, 60);
+  }
+
+  /* ---------- Live seeker map (hider's own position never leaves this phone) ---------- */
+  let hMap = null;
+  let hSeekerLayer = null;
+  let hMeLayer = null;
+  let hMyPos = null;
+  let hUserMoved = false;
+  let hGeoWatch = null;
+  let hMapSig = null;
+
+  function ensureSeekerMap() {
+    if (hMap || !window.L || !$("hider-map")) return;
+    hMap = L.map($("hider-map"), {
+      zoomControl: false,
+      attributionControl: false,
+      minZoom: 2,
+      maxZoom: 18,
+    }).setView([30, 10], 2);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      subdomains: "abcd",
+      maxZoom: 20,
+    }).addTo(hMap);
+    L.control.zoom({ position: "bottomright" }).addTo(hMap);
+    hSeekerLayer = L.layerGroup().addTo(hMap);
+    hMeLayer = L.layerGroup().addTo(hMap);
+    hMap.on("dragstart zoomstart", () => { hUserMoved = true; });
+    hMap.on("dblclick", () => { hUserMoved = false; renderSeekerMap(true); });
+    setTimeout(() => hMap.invalidateSize(), 120);
+    if (navigator.geolocation && window.isSecureContext && hGeoWatch == null) {
+      try {
+        hGeoWatch = navigator.geolocation.watchPosition(
+          (pos) => { hMyPos = { lat: pos.coords.latitude, lng: pos.coords.longitude }; },
+          () => { /* fine — seekers still show */ },
+          { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+        );
+      } catch { /* ignore */ }
+    }
+  }
+
+  function seekerPin(label, cls) {
+    return L.divIcon({
+      className: "jl-pin",
+      html: `<span class="jl-pin__dot ${cls || ""}"></span><span class="jl-pin__label">${label}</span>`,
+      iconSize: [20, 20],
+      iconAnchor: [10, 10],
+    });
+  }
+
+  function renderSeekerMap(forceFit) {
+    if (!hMap) return;
+    const locs = (JLNet.room && JLNet.room.seekerLocs) || [];
+    const sig = JSON.stringify([
+      locs.map((l) => [Math.round(l.lat * 1e5), Math.round(l.lng * 1e5)]),
+      hMyPos && [Math.round(hMyPos.lat * 1e5), Math.round(hMyPos.lng * 1e5)],
+    ]);
+    const meta = $("hider-seeker-meta");
+    if (sig === hMapSig && !forceFit) {
+      if (meta && locs.length) meta.textContent = seekerMetaText(locs);
+      return;
+    }
+    hMapSig = sig;
+    hSeekerLayer.clearLayers();
+    hMeLayer.clearLayers();
+    locs.forEach((l, i) => {
+      L.marker([l.lat, l.lng], { icon: seekerPin(locs.length > 1 ? "Seeker " + (i + 1) : "Seekers"), zIndexOffset: 500 }).addTo(hSeekerLayer);
+      if (l.acc && l.acc < 500) {
+        L.circle([l.lat, l.lng], { radius: l.acc, color: "#e8b04a", weight: 1, opacity: 0.3, fillOpacity: 0.06, interactive: false }).addTo(hSeekerLayer);
+      }
+    });
+    if (hMyPos) {
+      L.marker([hMyPos.lat, hMyPos.lng], { icon: seekerPin("You", "jl-pin__dot--me"), zIndexOffset: 600 }).addTo(hMeLayer);
+    }
+    if (meta) meta.textContent = locs.length ? seekerMetaText(locs) : "Waiting for their location…";
+    if ((forceFit || !hUserMoved) && (locs.length || hMyPos)) {
+      const pts = locs.map((l) => [l.lat, l.lng]).concat(hMyPos ? [[hMyPos.lat, hMyPos.lng]] : []);
+      try {
+        if (pts.length === 1) hMap.setView(pts[0], Math.max(hMap.getZoom(), 12));
+        else hMap.fitBounds(L.latLngBounds(pts), { padding: [36, 36], maxZoom: 14 });
+      } catch { /* ignore */ }
+    }
+  }
+
+  function seekerMetaText(locs) {
+    const newest = locs.reduce((a, b) => ((a.at || 0) > (b.at || 0) ? a : b));
+    const age = newest.at ? Math.max(0, Math.round((Date.now() - newest.at) / 1000)) : null;
+    let dist = "";
+    if (hMyPos && window.JLGeo) {
+      const miles = Math.min(...locs.map((l) => JLGeo.distMiles(hMyPos, l)));
+      dist = JLQuestions.formatMiles(Math.round(miles * 10) / 10, JLState.get().units) + " away · ";
+    }
+    return dist + (age == null ? "live" : age < 15 ? "live" : "updated " + age + "s ago");
   }
 
   let bound = false;
@@ -480,6 +573,7 @@
     renderStats();
     renderLog();
     renderSheet();
+    renderSeekerMap();
   }
 
   async function requestTimerVote() {

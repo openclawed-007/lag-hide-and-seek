@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
-  <link rel="stylesheet" href="css/styles.css?v=20" />
+  <link rel="stylesheet" href="css/styles.css?v=21" />
 </head>
 <body>
   <section id="start" class="start">
@@ -129,6 +129,15 @@
     <div id="hider-draw" class="hider-draw" hidden></div>
 
     <main class="hider-main">
+      <section class="hider-panel hider-panel--map">
+        <header>
+          <h2>Seekers</h2>
+          <span id="hider-seeker-meta">Waiting for their location…</span>
+        </header>
+        <div id="hider-map"></div>
+        <p class="hint hider-map-note">Seeker GPS updates live. Your own position only shows on this phone — it is never sent to them.</p>
+      </section>
+
       <section class="hider-panel">
         <header>
           <h2>Hand</h2>
@@ -277,9 +286,9 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="js/firebase-config.js?v=1"></script>
-  <script src="js/net.js?v=16"></script>
+  <script src="js/net.js?v=17"></script>
   <script src="js/qr.js?v=10"></script>
-  <script src="js/hider.js?v=17"></script>
-  <script src="js/app.js?v=15"></script>
+  <script src="js/hider.js?v=18"></script>
+  <script src="js/app.js?v=16"></script>
 </body>
 </html>

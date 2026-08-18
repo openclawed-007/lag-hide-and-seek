@@ -830,6 +830,16 @@ input:focus, select:focus { outline: none; }
   padding: 14px;
 }
 .hider-panel header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+#hider-map {
+  height: 260px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b1220;
+  border: 1px solid var(--line-2);
+}
+.hider-map-note { margin: 8px 0 0; font-size: 11px; }
+.jl-pin__dot--me { background: var(--teal); box-shadow: 0 0 0 6px rgba(61,186,164,.25); }
+.jl-pin__dot--me + .jl-pin__label { color: var(--teal); }
 .hider-panel h2 { margin: 0; font-size: 16px; }
 .hider-panel header span { color: var(--muted); font-size: 12px; }
 

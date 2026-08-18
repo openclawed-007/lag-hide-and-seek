@@ -564,6 +564,25 @@
     scheduleStationLoad(true);
     pushMeta();
     ensureTimerRunning();
+    startLocationShare();
+  }
+
+  /* Seekers share their live position with the hider (piggybacked on presence pings) */
+  let geoWatchId = null;
+  function startLocationShare() {
+    if (geoWatchId != null) return;
+    if (!navigator.geolocation || !window.isSecureContext) return;
+    try {
+      geoWatchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const ll = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
+          JLNet.setMyLocation(ll);
+          JLTools.remember(ll);
+        },
+        () => { /* denied or unavailable — tools still work via map taps */ },
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+      );
+    } catch { /* ignore */ }
   }
 
   function bindChrome() {

@@ -143,6 +143,10 @@ def public_room(room):
         "maxHand": room.get("maxHand") or 6,
         "log": (room.get("log") or [])[-40:],
         "move": room.get("move"),
+        "seekerLocs": [
+            {"lat": p["loc"]["lat"], "lng": p["loc"]["lng"], "acc": p["loc"].get("acc"), "at": (p.get("locAt") or 0) * 1000}
+            for p in seekers if p.get("loc") and t - (p.get("locAt") or 0) < 180
+        ],
     }
 
 
@@ -251,6 +255,15 @@ def apply_event(room, player, etype, payload):
     player["seen"] = now()
 
     if etype == "ping":
+        loc = payload.get("loc")
+        if isinstance(loc, dict) and player["role"] == "seeker" and loc.get("lat") is not None:
+            prev = player.get("loc") or {}
+            moved = (round(prev.get("lat", 0), 5) != round(float(loc["lat"]), 5)
+                     or round(prev.get("lng", 0), 5) != round(float(loc["lng"]), 5))
+            player["loc"] = {"lat": float(loc["lat"]), "lng": float(loc["lng"]), "acc": loc.get("acc")}
+            player["locAt"] = now()
+            if moved:
+                room["seq"] += 1
         return
 
     if etype == "meta":
