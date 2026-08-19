@@ -29,7 +29,7 @@
     const mapId = params.get("map");
 
     if (joinCode) {
-      showJoin(joinCode);
+      showJoin(joinCode, { autoJoin: joinCode.length >= 4 });
       if (joinCode.length >= 4) doJoin(joinCode);
     } else if (params.get("role") === "hide") {
       showJoin("");
@@ -105,11 +105,15 @@
     syncSetupForm();
   }
 
-  function showJoin(prefill) {
+  function showJoin(prefill, opts) {
     hideAll();
     $("join").hidden = false;
     if (prefill) $("join-code").value = String(prefill).toUpperCase();
-    $("join-code").focus();
+    syncJoinGo();
+    const canScan = typeof window.BarcodeDetector === "function" && navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+    if ($("join-scan")) $("join-scan").hidden = !canScan;
+    if ($("join-scan-fallback")) $("join-scan-fallback").hidden = !!canScan;
+    if (!(opts && opts.autoJoin)) $("join-code").focus();
   }
 
   function bindStart() {
@@ -132,7 +136,10 @@
     $("join-back").addEventListener("click", showStart);
     $("join-go").addEventListener("click", () => doJoin($("join-code").value));
     $("join-code").addEventListener("input", (e) => {
-      e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+      const next = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+      e.target.value = next;
+      syncJoinGo();
+      if (next.length === 6) doJoin(next);
     });
     $("join-code").addEventListener("keydown", (e) => {
       if (e.key === "Enter") doJoin($("join-code").value);
@@ -141,9 +148,20 @@
     $("join-scan-stop").addEventListener("click", stopScan);
   }
 
+  function syncJoinGo() {
+    const el = $("join-go");
+    if (!el) return;
+    const n = ($("join-code").value || "").trim().length;
+    el.disabled = joining || n < 6;
+    el.title = el.disabled && !joining ? "Enter all 6 characters" : "";
+  }
+
+  let joining = false;
   async function doJoin(raw) {
+    if (joining) return;
     const code = JLQR.codeFromText(raw) || String(raw || "").trim().toUpperCase();
     if (code.length < 4) return JLTools.toast("Enter the 6-character code from the seekers.");
+    joining = true;
     $("join-go").disabled = true;
     $("join-go").textContent = "Joining…";
     try {
@@ -161,8 +179,9 @@
     } catch (err) {
       JLTools.toast(err.message || "Could not join that game.");
     } finally {
-      $("join-go").disabled = false;
+      joining = false;
       $("join-go").textContent = "Join game";
+      syncJoinGo();
     }
   }
 
@@ -170,6 +189,7 @@
     const wrap = $("join-camera");
     const video = $("join-video");
     wrap.hidden = false;
+    $("join-scan").hidden = true;
     try {
       const text = await JLQR.scan(video);
       stopScan();
@@ -191,6 +211,8 @@
       video.srcObject = null;
     }
     $("join-camera").hidden = true;
+    const canScan = typeof window.BarcodeDetector === "function" && navigator.mediaDevices && navigator.mediaDevices.getUserMedia;
+    if ($("join-scan")) $("join-scan").hidden = !canScan;
   }
 
   function bindSetup() {
@@ -237,7 +259,10 @@
     $("setup-cta-size").textContent = s.presetId
       ? `${meta.label} game · ${s.units === "km" ? "kilometres" : "miles"}`
       : "Choose a country or metro above";
+    $("start-game").disabled = !s.presetId;
     $("setup-cta-go").disabled = !s.presetId;
+    $("start-game").title = s.presetId ? "" : "Pick a country or metro first";
+    $("setup-cta-go").title = s.presetId ? "" : "Pick a country or metro first";
   }
 
   function renderPresetGrid() {
@@ -277,6 +302,14 @@
       });
       root.appendChild(grid);
     });
+    if (!root.children.length) {
+      const empty = document.createElement("p");
+      empty.className = "empty preset-empty";
+      empty.textContent = q
+        ? "No maps match “" + ($("setup-search").value || "").trim() + "”. Try Japan, London, or a country name."
+        : "No maps to show.";
+      root.appendChild(empty);
+    }
   }
 
   async function startFromSetup() {
@@ -311,16 +344,15 @@
       JLState.setGeo(poly, poly);
       await ensureSeekerRoom();
       enterPlay(false);
-      openInvite();
+      if (JLNet.code) openInvite();
     } catch (err) {
       console.error(err);
       JLTools.toast("Could not load that border. Try again or draw custom.");
     } finally {
-      $("start-game").disabled = false;
       $("start-game").textContent = "Create game";
-      $("setup-cta-go").disabled = false;
       $("setup-cta-go").textContent = "Create game";
       $("setup").classList.remove("is-loading");
+      syncSetupForm();
     }
   }
 
@@ -339,7 +371,7 @@
     JLState.setGeo(worldish, worldish);
     ensureSeekerRoom().then(() => {
       enterPlay(false);
-      openInvite();
+      if (JLNet.code) openInvite();
       setTimeout(() => JLTools.activate("draw"), 200);
     });
   }
@@ -362,6 +394,8 @@
         presetId: s.presetId,
       });
       lastHandledAnswer = null;
+      lastInviteSig = "";
+      lastBannerSig = "";
       try { sessionStorage.removeItem("lag-last-answer"); } catch { /* ignore */ }
       bindRoom();
     } catch (err) {
@@ -428,17 +462,32 @@
     }
   }
 
+  let lastBannerSig = "";
   function renderSeekerBanners(room) {
     const bar = $("seeker-banner");
     if (!bar) return;
     if (!room) {
+      lastBannerSig = "";
       bar.hidden = true;
       bar.innerHTML = "";
       return;
     }
+    const timer = room.timer || {};
+    const sig = JSON.stringify([
+      room.pendingQuestion && [room.pendingQuestion.id, room.pendingQuestion.title],
+      (room.activeCurses || []).map((c) => [c.id, c.name, !!(c.proof && c.proof.photo)]),
+      room.disabledCategory || "",
+      room.move && room.move.minutes,
+      timer.running,
+      timer.pauseVotes || {},
+      timer.resumeVotes || {},
+    ]);
+    if (sig === lastBannerSig) return;
+    lastBannerSig = sig;
     const bits = [];
     if (room.pendingQuestion) {
-      bits.push(`<div class="banner-card is-wait"><b>Waiting for the hider</b><span>${escapeHtml(room.pendingQuestion.title)}</span></div>`);
+      bits.push(`<div class="banner-card is-wait"><b>Waiting for the hider</b><span>${escapeHtml(room.pendingQuestion.title)}</span>
+        <button type="button" class="btn btn-ghost" data-withdraw-q>Withdraw question</button></div>`);
     }
     (room.activeCurses || []).forEach((c) => {
       const proof = c.proof && c.proof.photo;
@@ -448,7 +497,7 @@
              <img class="curse-proof-thumb" src="${proof}" alt="Your proof">
              <button type="button" class="btn btn-ghost" data-view-proof="${escapeHtml(c.id)}">View proof</button>`
           : `<span>The hider has to confirm this. Send a photo of you completing it.</span>
-             <label class="btn btn-amber photo-pick">📷 Send proof<input type="file" accept="image/*" capture="environment" data-curse-proof="${escapeHtml(c.id)}" data-curse-name="${escapeHtml(c.name)}" hidden></label>`}
+             <label class="btn btn-amber photo-pick">Send photo proof<input type="file" accept="image/*" capture="environment" data-curse-proof="${escapeHtml(c.id)}" data-curse-name="${escapeHtml(c.name)}" hidden></label>`}
       </div>`);
     });
     if (room.disabledCategory) {
@@ -457,7 +506,6 @@
     if (room.move) {
       bits.push(`<div class="banner-card is-wait"><b>Hider is moving</b><span>Stay put for ${room.move.minutes} minutes. They will tell you their original station.</span></div>`);
     }
-    const timer = room.timer || {};
     if (timer.pauseVotes && timer.running && (timer.pauseVotes.seeker || timer.pauseVotes.hider)) {
       const who = timer.pauseVotes.seeker && timer.pauseVotes.hider
         ? "Both sides"
@@ -503,6 +551,11 @@
         }
       });
     });
+    bar.querySelectorAll("[data-withdraw-q]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        if (window.JLTools && JLTools.withdrawQuestion) JLTools.withdrawQuestion();
+      });
+    });
   }
 
   async function askHider(q) {
@@ -518,15 +571,24 @@
   function bindInvite() {
     $("btn-invite").addEventListener("click", openInvite);
     $("seeker-link").addEventListener("click", openInvite);
-    $("invite-close").addEventListener("click", () => { $("invite").hidden = true; });
+    $("invite-close").addEventListener("click", () => setInviteOpen(false));
+    async function copyText(text, okMsg) {
+      try {
+        await navigator.clipboard.writeText(text);
+        JLTools.toast(okMsg);
+      } catch {
+        JLTools.toast(text);
+      }
+    }
+    $("invite-code").addEventListener("click", () => {
+      if (JLNet.code) copyText(JLNet.code, "Code copied · " + JLNet.code);
+    });
     $("invite-copy").addEventListener("click", async () => {
       const url = JLNet.joinUrl();
-      try {
-        await navigator.clipboard.writeText(url);
-        JLTools.toast("Join link copied.");
-      } catch {
-        JLTools.toast(url);
-      }
+      copyText(url, "Join link copied.");
+    });
+    $("invite-url").addEventListener("click", () => {
+      if (JLNet.code) copyText(JLNet.joinUrl(), "Join link copied.");
     });
     if (navigator.share) $("invite-share").hidden = false;
     $("invite-share").addEventListener("click", async () => {
@@ -539,32 +601,53 @@
       } catch { /* user cancelled the share sheet */ }
     });
     $("invite").addEventListener("click", (e) => {
-      if (e.target.id === "invite") $("invite").hidden = true;
+      if (e.target.id === "invite") setInviteOpen(false);
     });
   }
 
   function openInvite() {
     if (!JLNet.code) {
       ensureSeekerRoom().then(() => {
+        if (!JLNet.code) {
+          JLTools.toast("Couldn’t create a linked room. You can still play on this device.");
+          return;
+        }
         renderInvite(JLNet.room);
-        $("invite").hidden = false;
+        setInviteOpen(true);
       });
       return;
     }
     renderInvite(JLNet.room);
-    $("invite").hidden = false;
+    setInviteOpen(true);
   }
 
+  function setInviteOpen(on) {
+    $("invite").hidden = !on;
+    const play = $("play");
+    if (play) play.inert = !!on;
+    if (on) {
+      const focusEl = $("invite-copy") || $("invite-close");
+      if (focusEl) setTimeout(() => focusEl.focus(), 30);
+    }
+  }
+
+  let lastInviteSig = "";
   function renderInvite(room) {
     if (!JLNet.code) return;
-    $("invite-code").textContent = JLNet.code;
-    $("invite-url").textContent = JLNet.joinUrl();
-    JLQR.draw($("invite-qr"), JLNet.joinUrl());
     const st = $("invite-status");
-    if (JLNet.mode === "local") st.textContent = "This tab can share the game with another tab. For a second phone, run python3 serve.py and open that address.";
-    else if (room && room.hiderOnline) st.textContent = "Hider is connected.";
-    else if (room && room.hiders > 0) st.textContent = "Hider joined — they may be in the background.";
-    else st.textContent = "Waiting for the hider to scan or type this code.";
+    let status;
+    if (JLNet.mode === "local") status = "This tab can share the game with another tab. For a second phone, run python3 serve.py and open that address.";
+    else if (room && room.hiderOnline) status = "Hider is connected.";
+    else if (room && room.hiders > 0) status = "Hider joined — they may be in the background.";
+    else status = "Waiting for the hider to scan or type this code.";
+    const url = JLNet.joinUrl();
+    const sig = JLNet.code + "|" + url + "|" + status;
+    if (sig === lastInviteSig) return;
+    lastInviteSig = sig;
+    $("invite-code").textContent = JLNet.code;
+    $("invite-url").textContent = url;
+    JLQR.draw($("invite-qr"), url);
+    st.textContent = status;
   }
 
   function enterPlay(fromRestore) {
@@ -666,6 +749,7 @@
         JLMap.paintMasks(s.playable, s.remaining);
         JLMap.renderZones(s.hidingZones);
         renderStations();
+        JLTools.toast("Undid " + (last.title || "the last cut") + ".");
       }
     });
     $("btn-new").addEventListener("click", async () => {
@@ -705,6 +789,7 @@
       a.href = URL.createObjectURL(blob);
       a.download = "jetlag-game.json";
       a.click();
+      JLTools.toast("Downloaded jetlag-game.json.");
     });
     $("btn-locate").addEventListener("click", locateMe);
     $("btn-load-stations").addEventListener("click", () => loadStations(true));
@@ -719,25 +804,34 @@
       JLMap.setDark(e.target.checked);
     });
     $("toggle-stations").addEventListener("change", () => renderStations());
-    $("layers-toggle").addEventListener("click", () => {
+    $("layers-toggle").addEventListener("click", (e) => {
+      e.stopPropagation();
       $("layers").classList.toggle("is-open");
     });
+    $("layers").addEventListener("click", (e) => e.stopPropagation());
     const moreBtn = $("btn-more");
     const moreMenu = $("more-menu");
+    function setMoreOpen(open) {
+      moreMenu.hidden = !open;
+      moreBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    }
     moreBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      moreMenu.hidden = !moreMenu.hidden;
+      setMoreOpen(moreMenu.hidden);
     });
     moreMenu.addEventListener("click", (e) => {
       const b = e.target.closest("[data-proxy]");
       if (!b) return;
-      moreMenu.hidden = true;
+      setMoreOpen(false);
       const target = $(b.getAttribute("data-proxy"));
       if (target) target.click();
     });
     document.addEventListener("click", (e) => {
       if (!moreMenu.hidden && !moreMenu.contains(e.target) && !moreBtn.contains(e.target)) {
-        moreMenu.hidden = true;
+        setMoreOpen(false);
+      }
+      if ($("layers").classList.contains("is-open") && !$("layers").contains(e.target) && !$("layers-toggle").contains(e.target)) {
+        $("layers").classList.remove("is-open");
       }
     });
     function closeDrawer() {
@@ -772,8 +866,9 @@
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
-        if (!$("invite").hidden) { $("invite").hidden = true; return; }
-        if (!$("more-menu").hidden) { $("more-menu").hidden = true; return; }
+        if (!$("invite").hidden) { setInviteOpen(false); return; }
+        if (!$("more-menu").hidden) { setMoreOpen(false); return; }
+        if ($("layers").classList.contains("is-open")) { $("layers").classList.remove("is-open"); return; }
         JLTools.cancel();
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
@@ -781,7 +876,7 @@
         $("btn-undo").click();
       }
       if (e.target.matches("input, textarea, select")) return;
-      const mapKeys = { 1: "radar", 2: "thermometer", 3: "measuring", 4: "matching", 5: "tentacles", 6: "photo" };
+      const mapKeys = { 1: "radar", 2: "thermometer", 3: "measuring", 4: "matching", 5: "tentacles", 6: "photo", 7: "zone", 8: "draw" };
       if (mapKeys[e.key]) {
         JLTools.activate(mapKeys[e.key]);
         if (e.key === "6") JLTools.handleClick(null);
@@ -885,6 +980,7 @@
       if (t.running && left <= 0) {
         JLState.startSeekClock();
         pushTimer();
+        JLTools.toast("Hiding time is up — seek has begun.");
       }
     } else {
       el.textContent = JLState.formatDuration(t.seekElapsedMs || 0);
@@ -917,6 +1013,7 @@
     $("toggle-dark").checked = s.layers.dark;
     document.querySelectorAll("[data-tool]").forEach((b) => {
       b.classList.toggle("is-on", b.getAttribute("data-tool") === JLTools.current());
+      if (b.getAttribute("data-tool") === "tentacles") b.hidden = s.size === "S";
     });
     if (window.JLMap) {
       JLMap.paintMasks(s.playable, s.remaining);
@@ -936,7 +1033,8 @@
       return;
     }
     JLMap.renderStations(s.stations, s.remaining, (st) => {
-      JLTools.placeZoneOnStation(st);
+      if (JLTools.current() === "zone") JLTools.placeZoneOnStation(st);
+      else JLMap.getMap().setView([st.lat, st.lng], Math.max(JLMap.getMap().getZoom(), 14));
     });
     renderStationList();
   }
@@ -959,10 +1057,11 @@
         const st = JLState.get().stations.find((x) => x.id === btn.getAttribute("data-id"));
         if (!st) return;
         JLMap.getMap().setView([st.lat, st.lng], 14);
-        JLTools.placeZoneOnStation(st);
+        if (JLTools.current() === "zone") JLTools.placeZoneOnStation(st);
       });
     });
-    $("hud-stations").textContent = JLState.remainingStations().length + " stations";
+    const n = JLState.remainingStations().length;
+    $("hud-stations").textContent = n ? n + " stations" : "— stations";
   }
 
   function scheduleStationLoad(immediate) {
@@ -1009,7 +1108,7 @@
         <div class="log-item__kind">${escapeHtml((e.kind || "note").toUpperCase())}</div>
         <h4>${escapeHtml(e.title || "")}</h4>
         <p>${escapeHtml(e.answer || e.detail || "")}${e.nullAnswer ? " · null" : ""}</p>
-        <footer>${escapeHtml(e.cost || "")}</footer>
+        <footer>${escapeHtml([e.cost, formatLogTime(e.at)].filter(Boolean).join(" · "))}</footer>
       </article>
     `).join("") || `<p class="empty">Ask a question. If a hider is linked, it goes to their phone first.</p>`;
   }
@@ -1049,6 +1148,13 @@
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function formatLogTime(at) {
+    if (!at) return "";
+    const d = typeof at === "number" ? new Date(at) : new Date(at);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   }
 
   async function runDemo(preset) {
@@ -1121,7 +1227,7 @@
     );
   }
 
-  window.JLApp = { askHider };
+  window.JLApp = { askHider, showStart };
 
   document.addEventListener("DOMContentLoaded", boot);
 })();

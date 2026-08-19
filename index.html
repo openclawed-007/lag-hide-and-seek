@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="vendor/leaflet.css" />
-  <link rel="stylesheet" href="css/styles.css?v=22" />
+  <link rel="stylesheet" href="css/styles.css?v=23" />
 </head>
 <body>
   <section id="start" class="start">
@@ -51,7 +51,7 @@
       </header>
       <div class="setup-row">
         <div>
-          <input id="setup-search" class="search" type="search" placeholder="Search Japan, London, Switzerland…" />
+          <input id="setup-search" class="search" type="search" placeholder="Search Japan, London, Switzerland…" aria-label="Search maps" />
           <div id="preset-grid"></div>
         </div>
         <aside class="setup-panel">
@@ -74,7 +74,7 @@
             <label><input id="t-tram" type="checkbox" checked /> Tram</label>
           </div>
           <div class="setup-actions">
-            <button id="start-game" class="btn btn-amber" type="button">Create game</button>
+            <button id="start-game" class="btn btn-amber" type="button" disabled>Create game</button>
             <button id="start-custom" class="btn btn-ghost" type="button">Draw custom borders</button>
             <button id="resume-btn" class="btn btn-ghost" type="button" hidden>Resume last map</button>
           </div>
@@ -85,7 +85,7 @@
           <b id="setup-cta-name">Pick a map</b>
           <span id="setup-cta-size"></span>
         </div>
-        <button id="setup-cta-go" class="btn btn-amber" type="button">Create game</button>
+        <button id="setup-cta-go" class="btn btn-amber" type="button" disabled>Create game</button>
       </div>
     </div>
   </section>
@@ -100,12 +100,14 @@
       </header>
       <label class="field">
         <span>Game code</span>
-        <input id="join-code" class="code-input" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="K7M2QX" />
+        <input id="join-code" class="code-input" maxlength="6" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="K7M2QX" inputmode="text" enterkeyhint="go" aria-label="Six-character game code" />
       </label>
-      <button type="button" id="join-go" class="btn btn-amber btn-block">Join game</button>
+      <button type="button" id="join-go" class="btn btn-amber btn-block" disabled>Join game</button>
       <button type="button" id="join-scan" class="btn btn-ghost btn-block">Scan QR code</button>
+      <p id="join-scan-fallback" class="hint" hidden>This browser cannot scan QR codes. Type the six-character code instead.</p>
       <div id="join-camera" class="join-camera" hidden>
-        <video id="join-video" playsinline></video>
+        <p class="hint">Point the camera at the seekers’ QR code.</p>
+        <video id="join-video" playsinline aria-label="Camera preview"></video>
         <button type="button" id="join-scan-stop" class="btn btn-ghost">Stop camera</button>
       </div>
     </div>
@@ -118,7 +120,7 @@
         <div class="hider-meta"><span id="hider-region">Game</span> · <span id="hider-size">Large</span></div>
       </div>
       <div class="hider-top__right">
-        <button type="button" id="hider-link" class="link-pill">Connecting…</button>
+        <button type="button" id="hider-link" class="link-pill" title="Copy game code">Connecting…</button>
         <div id="hider-timer" class="hider-timer">—</div>
         <button type="button" id="hider-pause" class="btn btn-ghost">Pause</button>
         <button type="button" id="hider-leave" class="btn btn-ghost">Leave</button>
@@ -134,7 +136,10 @@
           <h2>Seekers</h2>
           <span id="hider-seeker-meta">Waiting for their location…</span>
         </header>
-        <div id="hider-map"></div>
+        <div class="hider-map-wrap">
+          <div id="hider-map"></div>
+          <button type="button" id="hider-recenter" class="btn btn-ghost hider-recenter">Recenter</button>
+        </div>
         <p class="hint hider-map-note">Seeker GPS updates live. Your own position only shows on this phone — it is never sent to them.</p>
       </section>
 
@@ -200,10 +205,10 @@
         <button id="btn-reset" class="btn btn-ghost desktop-only" type="button">Reset cuts</button>
         <button id="btn-export" class="btn btn-ghost desktop-only" type="button">Export</button>
         <button id="btn-new" class="btn btn-ghost" type="button">Home</button>
-        <button id="btn-more" class="btn btn-ghost mobile-only" type="button" aria-label="More options">⋯</button>
+        <button id="btn-more" class="btn btn-ghost mobile-only" type="button" aria-label="More options" aria-haspopup="true" aria-expanded="false">⋯</button>
       </div>
     </header>
-    <div id="more-menu" class="more-menu" hidden>
+    <div id="more-menu" class="more-menu" hidden role="menu">
       <div id="more-head" class="more-menu__head"></div>
       <button type="button" data-proxy="btn-locate">📍 My pin</button>
       <button type="button" data-proxy="btn-reset">↺ Reset cuts</button>
@@ -259,8 +264,9 @@
       <div class="kicker">Invite the hider</div>
       <h2>Same game, two phones</h2>
       <p id="invite-status" class="hint">Waiting for the hider to scan or type this code.</p>
-      <div id="invite-qr" class="qr"></div>
-      <div id="invite-code" class="invite-code">————</div>
+      <div id="invite-qr" class="qr" role="img" aria-label="QR code to join this game"></div>
+      <button type="button" id="invite-code" class="invite-code" title="Copy code">————</button>
+      <p class="hint invite-copy-hint">Tap the code to copy</p>
       <p id="invite-url" class="invite-url"></p>
       <div class="actions">
         <button type="button" id="invite-copy" class="btn btn-amber">Copy join link</button>
@@ -270,7 +276,7 @@
     </div>
   </div>
 
-  <div id="jl-toast" class="toast" role="status"></div>
+  <div id="jl-toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script src="vendor/leaflet.js"></script>
   <script src="vendor/turf.min.js"></script>
@@ -282,13 +288,13 @@
   <script src="js/state.js?v=11"></script>
   <script src="js/overpass.js?v=11"></script>
   <script src="js/map.js?v=13"></script>
-  <script src="js/tools.js?v=14"></script>
+  <script src="js/tools.js?v=15"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
   <script src="js/firebase-config.js?v=1"></script>
   <script src="js/net.js?v=21"></script>
   <script src="js/qr.js?v=10"></script>
-  <script src="js/hider.js?v=19"></script>
-  <script src="js/app.js?v=18"></script>
+  <script src="js/hider.js?v=20"></script>
+  <script src="js/app.js?v=19"></script>
 </body>
 </html>

@@ -48,6 +48,13 @@
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  function formatLogTime(at) {
+    if (!at) return "";
+    const d = typeof at === "number" ? new Date(at) : new Date(at);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+
   function syncCards() {
     if (!JLNet.code) return Promise.resolve();
     return JLNet.send("cards.sync", {
@@ -90,7 +97,11 @@
   let hMapSig = null;
 
   function ensureSeekerMap() {
-    if (hMap || !window.L || !$("hider-map")) return;
+    if (hMap) {
+      setTimeout(() => { try { hMap.invalidateSize(); } catch { /* ignore */ } }, 120);
+      return;
+    }
+    if (!window.L || !$("hider-map")) return;
     hMap = L.map($("hider-map"), {
       zoomControl: false,
       attributionControl: false,
@@ -184,6 +195,24 @@
       if (e.key === "Escape" && sheetMode && !$("hider").hidden) closeSheet();
     });
     $("hider-pause").addEventListener("click", requestTimerVote);
+    $("hider-link").addEventListener("click", async () => {
+      if (!JLNet.code) return;
+      try {
+        await navigator.clipboard.writeText(JLNet.code);
+        toast("Code copied · " + JLNet.code);
+      } catch {
+        toast(JLNet.code);
+      }
+    });
+    $("hider-recenter").addEventListener("click", () => {
+      const locs = (JLNet.room && JLNet.room.seekerLocs) || [];
+      if (!locs.length && !hMyPos) {
+        toast("No pins yet — waiting for GPS.");
+        return;
+      }
+      hUserMoved = false;
+      renderSeekerMap(true);
+    });
     $("hider-leave").addEventListener("click", async () => {
       const ok = await JLTools.confirm("If the seekers have also left, this game is deleted and the code will not work again.", {
         title: "Leave this game?",
@@ -193,7 +222,8 @@
       if (!ok) return;
       await JLNet.leave();
       reset();
-      location.href = location.pathname;
+      if (window.JLApp && JLApp.showStart) JLApp.showStart();
+      else location.href = location.pathname;
     });
     $("hider-roll").addEventListener("click", () => {
       const n = 1 + Math.floor(Math.random() * 6);
@@ -341,7 +371,9 @@
   }
 
   function closeSheet() {
+    if (sheetMode && sheetMode.type === "over" && table && table.hand.length > table.maxHand) return;
     sheetMode = null;
+    if (table && table.hand.length > table.maxHand) sheetMode = { type: "over" };
     renderSheet();
   }
 
@@ -579,6 +611,12 @@
     pendingDraw = null;
     sheetMode = null;
     lastAnswerId = null;
+    lastTimerPhase = null;
+    lastBuzzedQuestion = null;
+    photoDraft = null;
+    photoDraftQ = null;
+    hMapSig = null;
+    Object.keys(renderSigs).forEach((k) => { delete renderSigs[k]; });
   }
 
   async function awardBonus(min, why) {
@@ -616,6 +654,7 @@
     renderCurses();
     renderStats();
     renderLog();
+    if (!sheetMode && table.hand.length > table.maxHand) sheetMode = { type: "over" };
     renderSheet();
     renderSeekerMap();
   }
@@ -647,9 +686,14 @@
     const btn = $("hider-pause");
     if (!t.phase || t.phase === "idle") {
       el.textContent = "Timer off";
-      if (btn) btn.textContent = "Pause";
+      if (btn) {
+        btn.textContent = "Pause";
+        btn.hidden = true;
+      }
+      lastTimerPhase = t.phase || "idle";
       return;
     }
+    if (btn) btn.hidden = false;
     if (t.phase === "hiding") {
       let elapsed = t.hideElapsedMs || 0;
       if (t.running && t.hideStartedAt) elapsed = Date.now() - t.hideStartedAt;
@@ -666,7 +710,11 @@
     if (btn) btn.textContent = t.running
       ? (votes.hider ? "Waiting…" : "Pause")
       : (votes.hider ? "Waiting…" : "Resume");
+    if (lastTimerPhase === "hiding" && t.phase === "seeking") toast("Seek has begun.");
+    lastTimerPhase = t.phase || "idle";
   }
+
+  let lastTimerPhase = null;
 
   /* Only rebuild a section when its data changes — a 500ms interval calls render(),
      and unconditional innerHTML rebuilds wipe input text and checkbox state. */
@@ -756,7 +804,7 @@
       ${isTent ? `<label class="field"><span>Named place</span><input id="hider-note" placeholder="e.g. Louvre"></label>
         <button type="button" class="btn btn-amber btn-block" data-h="answer-note" data-answer="named">Send the name</button>` : ""}
       ${isPhoto ? `<div class="photo-answer">
-        <label class="btn btn-ghost btn-block photo-pick">📷 Take or choose photo<input id="hider-photo-input" type="file" accept="image/*" capture="environment" hidden></label>
+        <label class="btn btn-ghost btn-block photo-pick">Take or choose a photo<input id="hider-photo-input" type="file" accept="image/*" capture="environment" hidden></label>
         <img id="hider-photo-preview" class="photo-preview" alt="Your photo" hidden>
         <label class="field"><span>Note (optional)</span><input id="hider-note" placeholder="Anything to add"></label>
         <button type="button" id="hider-photo-send" class="btn btn-amber btn-block" data-h="answer-photo" disabled>Send photo to seekers</button>
@@ -806,7 +854,7 @@
       <h2>Keep ${required} of ${pendingDraw.cards.length}</h2>
       <p class="hint">Tap the card${required > 1 ? "s" : ""} you want in hand. The rest are discarded.</p>
       <div class="card-row">${pendingDraw.cards.map((c) => cardHtml(c, pendingDraw.selected.includes(c.uid), "keep-toggle")).join("")}</div>
-      <button type="button" class="btn btn-amber btn-block" data-h="keep-confirm">Keep selected</button>`;
+      <button type="button" class="btn btn-amber btn-block" data-h="keep-confirm"${pendingDraw.selected.length === required ? "" : " disabled"}>${required === 1 ? "Keep this card" : "Keep " + required + " cards"}</button>`;
     if (wasHidden) pulseIn(root);
   }
 
@@ -885,7 +933,7 @@
     const sig = log.length + "|" + (log[0] ? (log[0].at || log[0].title || "") : "");
     if (!sigChanged("log", sig)) return;
     $("hider-log").innerHTML = log.length
-      ? log.map((e) => `<article class="log-item"><div class="log-item__kind">${escapeHtml((e.kind || "").toUpperCase())}</div><h4>${escapeHtml(e.title || "")}</h4><p>${escapeHtml(e.detail || "")}</p></article>`).join("")
+      ? log.map((e) => `<article class="log-item"><div class="log-item__kind">${escapeHtml((e.kind || "").toUpperCase())}</div><h4>${escapeHtml(e.title || "")}</h4><p>${escapeHtml(e.detail || "")}</p>${e.at ? `<footer>${escapeHtml(formatLogTime(e.at))}</footer>` : ""}</article>`).join("")
       : `<p class="empty">Questions will land here as seekers ask them.</p>`;
   }
 

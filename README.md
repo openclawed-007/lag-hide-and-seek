@@ -55,7 +55,7 @@ Rules reference: https://jetlag.denull.ru/en/rules/
 3. Zoom in and **Load stations in view** (or wait — it loads automatically past zoom 9).
 4. Ask with the left tools. If a hider is linked, wait for their answer; otherwise apply it yourself.
 
-Keyboard: `1–6` tools, `Esc` cancel, `⌘/Ctrl+Z` undo.
+Keyboard: `1–6` tools, `7` zone, `8` bounds, `Esc` cancel, `⌘/Ctrl+Z` undo.
 
 ## Data
 

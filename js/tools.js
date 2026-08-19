@@ -114,6 +114,12 @@
     if (fn) fn(latlng);
   }
 
+  function clearPendingIfAny() {
+    if (window.JLNet && JLNet.code && JLNet.room && JLNet.room.pendingQuestion) {
+      JLNet.send("question.cancel", {}).catch(() => {});
+    }
+  }
+
   function applyShape(shape, keepInside, entry) {
     try {
       if (!remaining()) {
@@ -121,6 +127,7 @@
         return;
       }
       if (!shape) {
+        clearPendingIfAny();
         JLState.applyClip(remaining(), Object.assign({ nullAnswer: true }, entry));
         cancel();
         return;
@@ -130,6 +137,7 @@
         toast("That would erase the whole remaining area. Adjust the answer or undo.");
         return;
       }
+      clearPendingIfAny();
       JLState.applyClip(next, entry);
       const s = JLState.get();
       if (window.JLMap) {
@@ -257,6 +265,7 @@
         setTimeout(() => { btn._jlLock = false; }, 400);
         const act = btn.getAttribute("data-act");
         if (act === "cancel") cancel();
+        else if (act === "withdraw") withdrawQuestion();
         else if (act === "ask") sendAsk(active);
         else if (act === "gps") {
           toast("Finding you…");
@@ -279,13 +288,34 @@
     });
   }
 
-  function sel(name, options, value) {
-    const opts = options.map((o) => {
-      const v = String(o.value);
-      const sel = String(value) === v ? " selected" : "";
-      return `<option value="${v}"${sel}>${o.label}</option>`;
-    }).join("");
-    return `<label class="field"><span>${name}</span><select data-field="${name.toLowerCase().replace(/\s+/g, "-")}">${opts}</select></label>`;
+  function optionHtml(o, value) {
+    const v = String(o.value);
+    const selected = String(value) === v ? " selected" : "";
+    return `<option value="${escapeHtml(v)}"${selected}>${escapeHtml(o.label)}</option>`;
+  }
+
+  function sel(name, options, value, field) {
+    const fieldName = field || name.toLowerCase().replace(/\s+/g, "-");
+    const grouped = options.some((o) => o.group);
+    let opts;
+    if (grouped) {
+      const order = [];
+      const buckets = new Map();
+      options.forEach((o) => {
+        const g = o.group || "Other";
+        if (!buckets.has(g)) {
+          buckets.set(g, []);
+          order.push(g);
+        }
+        buckets.get(g).push(o);
+      });
+      opts = order.map((g) =>
+        `<optgroup label="${escapeHtml(g)}">${buckets.get(g).map((o) => optionHtml(o, value)).join("")}</optgroup>`
+      ).join("");
+    } else {
+      opts = options.map((o) => optionHtml(o, value)).join("");
+    }
+    return `<label class="field"><span>${escapeHtml(name)}</span><select data-field="${escapeHtml(fieldName)}">${opts}</select></label>`;
   }
 
   function linked() {
@@ -301,19 +331,37 @@
     top.push(`<button class="btn btn-ghost" data-act="cancel" type="button">Cancel</button>`);
     if (linked()) {
       top.push(`<button class="btn btn-amber" data-act="ask" type="button">Ask the hider</button>`);
-      return `<div class="actions">${top.join("")}</div>`;
     }
     const apply = (options || []).map((o) =>
       `<button class="btn ${o.cls || "btn-ghost"}" data-act="${o.act}" type="button">${o.label}</button>`
     ).join("");
-    return `<div class="actions">${top.join("")}</div><div class="actions">${apply}</div>`;
+    if (!apply) return `<div class="actions">${top.join("")}</div>`;
+    const note = linked() ? `<p class="hint">Or apply the answer yourself if you already have it.</p>` : "";
+    return `<div class="actions">${top.join("")}</div>${note}<div class="actions">${apply}</div>`;
   }
 
   function waitingInspector(title) {
     setInspector(`
       <header><div class="kicker">Waiting on the hider</div>
       <h3>${escapeHtml(title)}</h3></header>
-      <p class="hint">This is on their phone. The map updates when they answer — or they veto / randomize.</p>`);
+      <p class="hint">This is on their phone. The map updates when they answer — or they veto / randomize.</p>
+      <div class="actions">
+        <button class="btn btn-ghost" data-act="withdraw" type="button">Withdraw question</button>
+      </div>`);
+  }
+
+  async function withdrawQuestion() {
+    if (!window.JLNet || !JLNet.code) {
+      cancel();
+      return;
+    }
+    try {
+      await JLNet.send("question.cancel", {});
+      cancel();
+      toast("Question withdrawn.");
+    } catch (err) {
+      toast(err.message || "Could not withdraw that.");
+    }
   }
 
   function sendAsk(kind) {
@@ -359,7 +407,7 @@
     };
     if (kind === "radar") {
       if (!clicks[0]) { toast("Pin your location first."); return null; }
-      const miles = Number(draft.miles === "custom" ? draft.custom : draft.miles);
+      const miles = draftRadarMiles();
       if (!miles) { toast("Pick a radius."); return null; }
       return Object.assign(base, {
         title: JLQuestions.promptFor("radar", milesLabel(miles)),
@@ -545,7 +593,7 @@
     change(why) { previewRadar(); if (why !== "input") renderRadar(); },
     act(act) {
       if (!clicks[0]) return toast("Waiting for GPS… or tap Use my location.");
-      const miles = Number(draft.miles === "custom" ? draft.custom : draft.miles);
+      const miles = draftRadarMiles();
       if (!miles || miles <= 0) return toast("Pick a radius.");
       const shape = JLGeo.circleMiles(clicks[0], miles);
       const label = milesLabel(miles);
@@ -559,9 +607,18 @@
     },
   };
 
+  function draftRadarMiles() {
+    if (draft.miles === "custom") {
+      const n = Number(draft.custom);
+      if (!n || n <= 0) return 0;
+      return units() === "km" ? n / 1.60934 : n;
+    }
+    return Number(draft.miles) || 0;
+  }
+
   function previewRadar() {
     if (!clicks[0]) return;
-    const miles = Number(draft.miles === "custom" ? draft.custom : draft.miles);
+    const miles = draftRadarMiles();
     if (!miles) return;
     JLMap.showPreview(JLGeo.circleMiles(clicks[0], miles));
   }
@@ -576,7 +633,7 @@
       <header><div class="kicker">Radar · ${JLQuestions.costLabel("radar")}</div>
       <h3>Are you within ${draft.miles === "custom" ? "this radius" : milesLabel(Number(draft.miles || 5))} of me?</h3></header>
       <p class="hint">Centered on <em>you</em> (GPS). Radar is the hider’s current spot, not their zone.</p>
-      ${sel("Miles", opts, draft.miles || "5")}
+      ${sel(units() === "km" ? "Kilometres" : "Miles", opts, draft.miles || "5", "miles")}
       ${custom}
       ${askRow([
         { act: "no", label: "No — cut inside", cls: "btn-rose" },
@@ -658,6 +715,7 @@
       if (!clicks[0]) return toast("Click your position first.");
       const subject = draft.subject || "airport";
       if (subject === "sea-level") {
+        clearPendingIfAny();
         JLState.applyClip(remaining(), {
           kind: "measuring",
           title: JLQuestions.promptFor("measuring", "sea level"),
@@ -672,6 +730,7 @@
       try {
         const shape = await measuringShape(clicks[0], subject);
         if (!shape) {
+          clearPendingIfAny();
           JLState.applyClip(remaining(), {
             kind: "measuring",
             title: JLQuestions.promptFor("measuring", labelOf(JLQuestions.MEASURING, subject)),
@@ -756,7 +815,7 @@
   }
 
   function renderMeasuring() {
-    const opts = JLQuestions.MEASURING.map((m) => ({ value: m.id, label: m.label }));
+    const opts = JLQuestions.MEASURING.map((m) => ({ value: m.id, label: m.label, group: m.group }));
     const meta = JLQuestions.MEASURING.find((m) => m.id === (draft.subject || "airport"));
     setInspector(`
       <header><div class="kicker">Measuring · ${JLQuestions.costLabel("measuring")}</div>
@@ -784,6 +843,7 @@
       if (!clicks[0]) return toast("Click your position first.");
       const subject = draft.subject || "airport";
       if (subject === "landmass" || subject === "street" || subject === "station-length") {
+        clearPendingIfAny();
         JLState.applyClip(remaining(), {
           kind: "matching",
           title: JLQuestions.promptFor("matching", labelOf(JLQuestions.MATCHING, subject)),
@@ -799,6 +859,7 @@
         if (subject.startsWith("admin")) {
           const poly = await JLOverpass.adminAt(clicks[0], subject);
           if (!poly) {
+            clearPendingIfAny();
             JLState.applyClip(remaining(), {
               kind: "matching",
               title: JLQuestions.promptFor("matching", labelOf(JLQuestions.MATCHING, subject)),
@@ -834,6 +895,7 @@
         const { points } = await JLOverpass.pois(subject, bbox);
         const inside = JLOverpass.filterIn(playable(), points);
         if (!inside.length) {
+          clearPendingIfAny();
           JLState.applyClip(remaining(), {
             kind: "matching",
             title: JLQuestions.promptFor("matching", labelOf(JLQuestions.MATCHING, subject)),
@@ -872,7 +934,7 @@
   };
 
   function renderMatching() {
-    const opts = JLQuestions.MATCHING.map((m) => ({ value: m.id, label: m.label }));
+    const opts = JLQuestions.MATCHING.map((m) => ({ value: m.id, label: m.label, group: m.group }));
     const meta = JLQuestions.MATCHING.find((m) => m.id === (draft.subject || "airport"));
     setInspector(`
       <header><div class="kicker">Matching · ${JLQuestions.costLabel("matching")}</div>
@@ -1015,6 +1077,7 @@
     },
     act(act) {
       if (act !== "drop" || !clicks[0]) return;
+      clearPendingIfAny();
       const miles = JLQuestions.SIZES[JLState.get().size].zoneMiles;
       const zone = {
         id: "z-" + Date.now(),
@@ -1059,6 +1122,7 @@
   tools.photo = {
     click() { renderPhoto(); },
     act(act) {
+      clearPendingIfAny();
       const list = JLQuestions.photosFor(JLState.get().size);
       const spec = list.find((p) => p.id === draft.photo) || list[0];
       if (!spec) return;
@@ -1277,6 +1341,7 @@
     renderActive,
     toast,
     confirm: confirmDialog,
+    withdrawQuestion,
     applyHere,
     remember,
     applyRemoteAnswer,
